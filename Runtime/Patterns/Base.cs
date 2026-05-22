@@ -94,7 +94,9 @@ namespace Strada.Core.Patterns
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void RegisterSignalHandler<T>(Action<T> handler) where T : struct
         {
-            EventBus?.RegisterSignalHandler(handler);
+            // Store the token so base Dispose clears the slot if this instance still owns it.
+            var token = EventBus?.RegisterSignalHandler(handler);
+            if (token != null) _disposables.Add(token);
         }
 
         /// <summary>
@@ -104,7 +106,8 @@ namespace Strada.Core.Patterns
         protected void RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)
             where TQuery : struct, IQuery<TResult>
         {
-            EventBus?.RegisterQueryHandler(handler);
+            var token = EventBus?.RegisterQueryHandler(handler);
+            if (token != null) _disposables.Add(token);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

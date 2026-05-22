@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+#### Signal/Query token API
+
+Extends the token foundation to the signal and query buses. The
+signal/query semantic remains single-slot (1:1, by design — `Send` and
+`Query` dispatch to exactly one handler); the token only adds
+race-safe per-handler removal, it does not turn signals into events.
+
+- **`EventBus.RegisterSignalHandler<TSignal>`** (both `Action` and
+  `ISignalHandler` overloads) now returns a `SubscriptionToken` whose
+  disposal removes the registered handler from the slot **only if it
+  is still there** (`ReferenceEquals` check). A later
+  `RegisterSignalHandler` call that replaced the slot survives a stale
+  token disposal.
+- **`EventBus.RegisterQueryHandler<TQuery, TResult>`** (both overloads)
+  gets the same treatment.
+- Both interfaces (`ISignalBus`, `IQueryBus`) keep their `void`
+  signatures via explicit interface implementations, so external
+  implementers are unaffected.
+- **`Patterns/Base`** and **`ECS/SystemBase`** wrappers
+  (`RegisterSignalHandler`, `RegisterQueryHandler`) now capture the
+  returned tokens into a per-instance `_disposables` list — subclasses
+  that register signals or queries get automatic teardown when the
+  pattern or system is disposed.
+- New `[Obsolete]` markers on `EventBus.UnregisterSignalHandler<T>` and
+  `EventBus.UnregisterQueryHandler<TQuery, TResult>` pointing at the
+  token-based replacement.
+
+### Roadmap (next major version)
+
+The following items are tracked for the next major release to close out
+the F8/F9 deprecation cycle. Items below are NOT in this release — they
+describe what the next major version will do once the obsolete-warning
+period has elapsed.
+
+- **Remove `[Obsolete]` shims:**
+  `IReadOnlyReactiveProperty<T>.Unsubscribe`, `EventBus.Unsubscribe<TEvent>`,
+  `EventBus.UnregisterSignalHandler<T>`, `EventBus.UnregisterQueryHandler<TQuery, TResult>`.
+- **Tighten interface signatures:** change
+  `IReadOnlyReactiveProperty<T>.Subscribe` return type from `void` to
+  `SubscriptionToken` (binary break — external implementers of the
+  interface will need to update). Same for the equivalents on
+  `ISignalBus`, `IQueryBus`, `IEventPublisher` where applicable.
+- **Test/benchmark migration:** approximately 10 call sites across
+  `Tests/Runtime/Communication/*.cs` and
+  `Tests/Runtime/Performance/EventBusSubscribeBenchmarks.cs` still use
+  the legacy `Unsubscribe` / `Unregister*` APIs. They must be migrated
+  to token disposal before the obsolete methods are removed. Migration
+  is mechanical: `Register(...)`/`Subscribe(...)` calls now return a
+  token; capture it locally, dispose at end-of-test.
+- **Documentation refresh:** `Documentation~/Messaging.md` and
+  `Documentation~/Sync.md` need a "Migration from void Subscribe/Unsubscribe"
+  section showing the before/after for each affected API.
+- **Version bump:** `package.json` from `1.0.0-alpha.1` to the next
+  appropriate major (the framework is internally referenced as "v3";
+  the public semver should follow when the deprecation cycle closes).
+
 #### F8 + F9 Phase 1 (full caller migration) + Phase 2 prep
 
 Completes the internal caller migration started in the previous Phase 1

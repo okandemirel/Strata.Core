@@ -156,9 +156,17 @@ namespace Strada.Core.Communication
             Publish(ref message);
         }
 
-        public void RegisterSignalHandler<TSignal>(Action<TSignal> handler) where TSignal : struct
+        /// <summary>
+        /// Registers a signal handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes <paramref name="handler"/> from the single-handler slot
+        /// for <typeparamref name="TSignal"/>. Disposal is race-safe: if a later
+        /// <c>RegisterSignalHandler</c> call has already replaced the slot with a
+        /// different handler, the token does not clear it.
+        /// </summary>
+        public Strada.Core.SubscriptionToken RegisterSignalHandler<TSignal>(Action<TSignal> handler) where TSignal : struct
         {
             if (_disposed) ThrowDisposed();
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
 
             lock (_lock)
             {
@@ -169,13 +177,35 @@ namespace Strada.Core.Communication
 
                 Volatile.Write(ref _signalHandlers[id], handler);
             }
+
+            return new Strada.Core.SubscriptionToken(() =>
+            {
+                if (_disposed) return;
+                lock (_lock)
+                {
+                    var id = SignalTypeId<TSignal>.Id;
+                    var arr = _signalHandlers;
+                    if (id < arr.Length && ReferenceEquals(arr[id], handler))
+                        Volatile.Write(ref arr[id], null);
+                }
+            });
         }
 
-        public void RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) where TSignal : struct
+        public Strada.Core.SubscriptionToken RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) where TSignal : struct
         {
-            RegisterSignalHandler<TSignal>(handler.Handle);
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            return RegisterSignalHandler<TSignal>(handler.Handle);
         }
 
+        // Explicit interface implementation preserves the ISignalBus.RegisterSignalHandler
+        // void contract for callers that go through the interface.
+        void ISignalBus.RegisterSignalHandler<TSignal>(Action<TSignal> handler) => RegisterSignalHandler(handler);
+
+        void ISignalBus.RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) => RegisterSignalHandler(handler);
+
+        [Obsolete("Dispose the SubscriptionToken returned by RegisterSignalHandler instead. " +
+                  "This method clears the slot unconditionally and will be removed in the next major release.",
+                  error: false)]
         public void UnregisterSignalHandler<TSignal>() where TSignal : struct
         {
             if (_disposed) ThrowDisposed();
@@ -198,10 +228,18 @@ namespace Strada.Core.Communication
             return id < handlers.Length && handlers[id] != null;
         }
 
-        public void RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler)
+        /// <summary>
+        /// Registers a query handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes <paramref name="handler"/> from the single-handler slot
+        /// for <typeparamref name="TQuery"/>. Disposal is race-safe: if a later
+        /// <c>RegisterQueryHandler</c> call has already replaced the slot with a
+        /// different handler, the token does not clear it.
+        /// </summary>
+        public Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler)
             where TQuery : struct, IQuery<TResult>
         {
             if (_disposed) ThrowDisposed();
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
 
             lock (_lock)
             {
@@ -209,14 +247,36 @@ namespace Strada.Core.Communication
                 EnsureCapacity(ref _queryHandlers, id);
                 Volatile.Write(ref _queryHandlers[id], handler);
             }
+
+            return new Strada.Core.SubscriptionToken(() =>
+            {
+                if (_disposed) return;
+                lock (_lock)
+                {
+                    var id = QueryTypeId<TQuery>.Id;
+                    var arr = _queryHandlers;
+                    if (id < arr.Length && ReferenceEquals(arr[id], handler))
+                        Volatile.Write(ref arr[id], null);
+                }
+            });
         }
 
-        public void RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)
+        public Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)
             where TQuery : struct, IQuery<TResult>
         {
-            RegisterQueryHandler(new DelegateQueryHandler<TQuery, TResult>(handler));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            return RegisterQueryHandler(new DelegateQueryHandler<TQuery, TResult>(handler));
         }
 
+        // Explicit interface implementation preserves the IQueryBus.RegisterQueryHandler
+        // void contract for callers that go through the interface.
+        void IQueryBus.RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler) => RegisterQueryHandler(handler);
+
+        void IQueryBus.RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler) => RegisterQueryHandler(handler);
+
+        [Obsolete("Dispose the SubscriptionToken returned by RegisterQueryHandler instead. " +
+                  "This method clears the slot unconditionally and will be removed in the next major release.",
+                  error: false)]
         public void UnregisterQueryHandler<TQuery, TResult>() where TQuery : struct, IQuery<TResult>
         {
             if (_disposed) ThrowDisposed();

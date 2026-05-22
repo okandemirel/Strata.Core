@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Strada.Core.Communication;
 using Strada.Core.ECS.Core;
@@ -11,6 +12,7 @@ namespace Strada.Core.ECS.Systems
 {
     public abstract class SystemBase : ISystem
     {
+        private readonly List<IDisposable> _disposables = new(4);
         private bool _initialized;
         private bool _disposed;
 
@@ -49,6 +51,12 @@ namespace Strada.Core.ECS.Systems
         {
             if (_disposed) return;
             OnDispose();
+            // Release any tokens captured by the RegisterSignalHandler / RegisterQueryHandler
+            // wrappers below so the EventBus slots do not retain references to this disposed
+            // system. LIFO disposal matches Patterns/Base.
+            for (int i = _disposables.Count - 1; i >= 0; i--)
+                _disposables[i].Dispose();
+            _disposables.Clear();
             _disposed = true;
         }
 
@@ -145,7 +153,9 @@ namespace Strada.Core.ECS.Systems
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void RegisterSignalHandler<T>(Action<T> handler) where T : struct
         {
-            EventBus?.RegisterSignalHandler(handler);
+            // Capture the token so Dispose can clear the slot if this system still owns it.
+            var token = EventBus?.RegisterSignalHandler(handler);
+            if (token != null) _disposables.Add(token);
         }
     }
 
