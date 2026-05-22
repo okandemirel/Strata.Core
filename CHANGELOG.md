@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+#### F8 + F9 Phase 1 (full caller migration) + Phase 2 prep
+
+Completes the internal caller migration started in the previous Phase 1
+PR and adds the first `[Obsolete]` markers as preparation for the next
+major version.
+
+- **Sync/ReactiveExtensions:** all eight derived-property types
+  (`MappedProperty`, `FilteredProperty`, `CombinedProperty<T1,T2>`,
+  `CombinedProperty<T1,T2,T3>`, `ThrottledProperty`, `DistinctProperty`,
+  `PropertyBinding`, `ConvertedBinding`) now store the
+  `SubscriptionToken` returned by their source(s) and dispose those
+  tokens on `Dispose` instead of calling `_source.Unsubscribe(...)`.
+- **Sync/ComputedProperty.WatchDependency:** uses the new
+  `SubscribeToken` helper, removing the per-dependency
+  `DependencySubscription` wrapper class allocation on the fast path
+  (the wrapper still backs the reflection-based untyped path).
+- **Sync/EntityMediator:** removed the `_unsubscribeActions` Action
+  list; the two `Subscribe` wrappers now store the bus's
+  `SubscriptionToken` directly in `_disposables`.
+- **New extension:**
+  `IReadOnlyReactiveProperty<T>.SubscribeToken(handler)` — returns a
+  `SubscriptionToken` regardless of whether the static type is the
+  interface (whose explicit `Subscribe` returns `void`) or the
+  concrete `ReactiveProperty<T>`. Internal helper bridging the gap
+  during the deprecation cycle.
+
+Phase 2 prep (`[Obsolete]` markers, warning-level only):
+- `IReadOnlyReactiveProperty<T>.Unsubscribe(Action<T>)` — dispose the
+  token returned by `Subscribe` instead.
+- `EventBus.Unsubscribe<TEvent>(Action<TEvent>)` — same.
+
+These deprecate the legacy reference-based removal API. The methods
+remain functional this release; the next major release will remove
+them. External callers that rely on `Unsubscribe(handler)` directly
+will see a compile-time warning pointing to the token API.
+
 #### F8 + F9 caller migration (Phase 1, partial) + F10 generator hardening
 
 - **Patterns/Base** migrated to the token API: removed the

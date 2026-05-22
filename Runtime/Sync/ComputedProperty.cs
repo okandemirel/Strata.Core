@@ -180,8 +180,10 @@ namespace Strada.Core.Sync
         private void WatchDependency<TDep>(IReadOnlyReactiveProperty<TDep> dependency)
         {
             Action<TDep> handler = _ => Invalidate();
-            dependency.Subscribe(handler);
-            _subscriptions.Add(new DependencySubscription<TDep>(dependency, handler));
+            // SubscribeToken returns an IDisposable that mirrors the old DependencySubscription
+            // wrapper, but is allocated by the underlying ReactiveProperty itself (zero extra
+            // wrapper objects on the concrete-type fast path).
+            _subscriptions.Add(dependency.SubscribeToken(handler));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -222,20 +224,6 @@ namespace Strada.Core.Sync
 
             _subscriptions.Clear();
             _handlers.Clear();
-        }
-
-        private sealed class DependencySubscription<TDep> : IDisposable
-        {
-            private readonly IReadOnlyReactiveProperty<TDep> _property;
-            private readonly Action<TDep> _handler;
-
-            public DependencySubscription(IReadOnlyReactiveProperty<TDep> property, Action<TDep> handler)
-            {
-                _property = property;
-                _handler = handler;
-            }
-
-            public void Dispose() => _property.Unsubscribe(_handler);
         }
 
         private sealed class UntypedDependencySubscription : IDisposable

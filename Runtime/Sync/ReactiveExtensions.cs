@@ -79,6 +79,7 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<TSource> _source;
         private readonly Func<TSource, TResult> _selector;
         private readonly List<Action<TResult>> _handlers = new(4);
+        private Strada.Core.SubscriptionToken _sourceToken;
         private TResult _cachedValue;
         private bool _disposed;
 
@@ -93,7 +94,7 @@ namespace Strada.Core.Sync
             _source = source;
             _selector = selector;
             _cachedValue = _selector(_source.Value);
-            _source.Subscribe(OnSourceChanged);
+            _sourceToken = _source.SubscribeToken(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -111,7 +112,7 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source.Unsubscribe(OnSourceChanged);
+            _sourceToken?.Dispose();
             _handlers.Clear();
         }
     }
@@ -121,6 +122,7 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<T> _source;
         private readonly Func<T, bool> _predicate;
         private readonly List<Action<T>> _handlers = new(4);
+        private Strada.Core.SubscriptionToken _sourceToken;
         private T _lastValidValue;
         private bool _disposed;
 
@@ -136,7 +138,7 @@ namespace Strada.Core.Sync
             _predicate = predicate;
             if (_predicate(_source.Value))
                 _lastValidValue = _source.Value;
-            _source.Subscribe(OnSourceChanged);
+            _sourceToken = _source.SubscribeToken(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -155,7 +157,7 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source.Unsubscribe(OnSourceChanged);
+            _sourceToken?.Dispose();
             _handlers.Clear();
         }
     }
@@ -166,6 +168,8 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<T2> _source2;
         private readonly Func<T1, T2, TResult> _combiner;
         private readonly List<Action<TResult>> _handlers = new(4);
+        private Strada.Core.SubscriptionToken _source1Token;
+        private Strada.Core.SubscriptionToken _source2Token;
         private TResult _cachedValue;
         private bool _disposed;
 
@@ -184,8 +188,8 @@ namespace Strada.Core.Sync
             _source2 = source2;
             _combiner = combiner;
             _cachedValue = _combiner(_source1.Value, _source2.Value);
-            _source1.Subscribe(OnSource1Changed);
-            _source2.Subscribe(OnSource2Changed);
+            _source1Token = _source1.SubscribeToken(OnSource1Changed);
+            _source2Token = _source2.SubscribeToken(OnSource2Changed);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -209,8 +213,8 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source1.Unsubscribe(OnSource1Changed);
-            _source2.Unsubscribe(OnSource2Changed);
+            _source1Token?.Dispose();
+            _source2Token?.Dispose();
             _handlers.Clear();
         }
     }
@@ -222,6 +226,9 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<T3> _source3;
         private readonly Func<T1, T2, T3, TResult> _combiner;
         private readonly List<Action<TResult>> _handlers = new(4);
+        private Strada.Core.SubscriptionToken _source1Token;
+        private Strada.Core.SubscriptionToken _source2Token;
+        private Strada.Core.SubscriptionToken _source3Token;
         private TResult _cachedValue;
         private bool _disposed;
 
@@ -242,9 +249,9 @@ namespace Strada.Core.Sync
             _source3 = source3;
             _combiner = combiner;
             _cachedValue = _combiner(_source1.Value, _source2.Value, _source3.Value);
-            _source1.Subscribe(OnSource1Changed);
-            _source2.Subscribe(OnSource2Changed);
-            _source3.Subscribe(OnSource3Changed);
+            _source1Token = _source1.SubscribeToken(OnSource1Changed);
+            _source2Token = _source2.SubscribeToken(OnSource2Changed);
+            _source3Token = _source3.SubscribeToken(OnSource3Changed);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -269,9 +276,9 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source1.Unsubscribe(OnSource1Changed);
-            _source2.Unsubscribe(OnSource2Changed);
-            _source3.Unsubscribe(OnSource3Changed);
+            _source1Token?.Dispose();
+            _source2Token?.Dispose();
+            _source3Token?.Dispose();
             _handlers.Clear();
         }
     }
@@ -281,6 +288,7 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<T> _source;
         private readonly float _interval;
         private readonly List<Action<T>> _handlers = new(4);
+        private Strada.Core.SubscriptionToken _sourceToken;
         private T _pendingValue;
         private T _lastEmittedValue;
         private float _lastEmitTime;
@@ -299,7 +307,7 @@ namespace Strada.Core.Sync
             _interval = intervalSeconds;
             _lastEmittedValue = _source.Value;
             _lastEmitTime = UnityEngine.Time.realtimeSinceStartup;
-            _source.Subscribe(OnSourceChanged);
+            _sourceToken = _source.SubscribeToken(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -338,7 +346,7 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source.Unsubscribe(OnSourceChanged);
+            _sourceToken?.Dispose();
             _handlers.Clear();
         }
     }
@@ -348,6 +356,7 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<T> _source;
         private readonly EqualityComparer<T> _comparer = EqualityComparer<T>.Default;
         private readonly List<Action<T>> _handlers = new(4);
+        private Strada.Core.SubscriptionToken _sourceToken;
         private T _lastValue;
         private bool _disposed;
 
@@ -361,7 +370,7 @@ namespace Strada.Core.Sync
         {
             _source = source;
             _lastValue = _source.Value;
-            _source.Subscribe(OnSourceChanged);
+            _sourceToken = _source.SubscribeToken(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -380,7 +389,7 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source.Unsubscribe(OnSourceChanged);
+            _sourceToken?.Dispose();
             _handlers.Clear();
         }
     }
@@ -389,6 +398,7 @@ namespace Strada.Core.Sync
     {
         private readonly IReadOnlyReactiveProperty<T> _source;
         private readonly ReactiveProperty<T> _target;
+        private Strada.Core.SubscriptionToken _sourceToken;
         private bool _disposed;
 
         public PropertyBinding(IReadOnlyReactiveProperty<T> source, ReactiveProperty<T> target)
@@ -396,7 +406,7 @@ namespace Strada.Core.Sync
             _source = source;
             _target = target;
             _target.SetWithoutNotify(_source.Value);
-            _source.Subscribe(OnSourceChanged);
+            _sourceToken = _source.SubscribeToken(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -406,7 +416,7 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source.Unsubscribe(OnSourceChanged);
+            _sourceToken?.Dispose();
         }
     }
 
@@ -415,6 +425,7 @@ namespace Strada.Core.Sync
         private readonly IReadOnlyReactiveProperty<TSource> _source;
         private readonly ReactiveProperty<TTarget> _target;
         private readonly Func<TSource, TTarget> _converter;
+        private Strada.Core.SubscriptionToken _sourceToken;
         private bool _disposed;
 
         public ConvertedBinding(
@@ -426,7 +437,7 @@ namespace Strada.Core.Sync
             _target = target;
             _converter = converter;
             _target.SetWithoutNotify(_converter(_source.Value));
-            _source.Subscribe(OnSourceChanged);
+            _sourceToken = _source.SubscribeToken(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -436,7 +447,7 @@ namespace Strada.Core.Sync
         {
             if (_disposed) return;
             _disposed = true;
-            _source.Unsubscribe(OnSourceChanged);
+            _sourceToken?.Dispose();
         }
     }
 }

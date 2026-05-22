@@ -12,7 +12,9 @@ namespace Strada.Core.Sync
     {
         private readonly List<IComponentBinding> _bindings = new(8);
         private readonly List<IDisposable> _disposables = new(4);
-        private readonly List<Action> _unsubscribeActions = new(4);
+        // Bind-scoped subscription tokens. Cleared on Unbind so that bind/unbind cycles
+        // do not leak handlers on the bus or accumulate tokens for the mediator's lifetime.
+        private readonly List<IDisposable> _bindSubscriptions = new(4);
         private EntityManager _entities;
         private IContainer _container;
         private IEventBus _bus;
@@ -59,9 +61,9 @@ namespace Strada.Core.Sync
                 binding.Dispose();
             _bindings.Clear();
 
-            foreach (var unsubscribe in _unsubscribeActions)
-                unsubscribe();
-            _unsubscribeActions.Clear();
+            for (int i = _bindSubscriptions.Count - 1; i >= 0; i--)
+                _bindSubscriptions[i].Dispose();
+            _bindSubscriptions.Clear();
 
             _entity = default;
             _view = null;
@@ -151,15 +153,16 @@ namespace Strada.Core.Sync
                     handler(e);
             };
 
-            _bus.Subscribe(filter);
-            _unsubscribeActions.Add(() => _bus.Unsubscribe(filter));
+            // Token-based bind-scoped subscription: the token goes into _bindSubscriptions
+            // so Unbind removes the handler from the bus, preventing leaks across
+            // bind/unbind cycles on pooled mediators.
+            _bindSubscriptions.Add(_bus.Subscribe(filter));
         }
 
         protected void Subscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
         {
             if (_bus == null) return;
-            _bus.Subscribe(handler);
-            _unsubscribeActions.Add(() => _bus.Unsubscribe(handler));
+            _bindSubscriptions.Add(_bus.Subscribe(handler));
         }
 
         protected void Publish<TEvent>(TEvent message) where TEvent : struct

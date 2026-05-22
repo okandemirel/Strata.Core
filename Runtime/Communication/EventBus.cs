@@ -264,6 +264,9 @@ namespace Strada.Core.Communication
         // for callers that go through the interface. The class-level Subscribe returns a token.
         void IEventPublisher.Subscribe<TEvent>(Action<TEvent> handler) => Subscribe(handler);
 
+        [Obsolete("Dispose the SubscriptionToken returned by Subscribe<TEvent> instead. " +
+                  "Unsubscribe-by-reference will be removed in the next major release.",
+                  error: false)]
         public void Unsubscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
         {
             if (_disposed) return;
