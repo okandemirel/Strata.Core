@@ -150,7 +150,8 @@ namespace Strada.Core.Editor.DataProviders
                     var regexPattern = "^" + Regex.Escape(pattern)
                         .Replace("\\*", ".*")
                         .Replace("\\?", ".") + "$";
-                    return Regex.IsMatch(typeName, regexPattern, RegexOptions.IgnoreCase);
+                    return Regex.IsMatch(typeName, regexPattern, RegexOptions.IgnoreCase,
+                        TimeSpan.FromMilliseconds(100));
                 }
                 catch
                 {

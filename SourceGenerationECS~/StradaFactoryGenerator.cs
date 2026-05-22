@@ -211,7 +211,7 @@ namespace Strada.SourceGeneration
 
         private static void GenerateFactory(StringBuilder sb, ServiceInfo service)
         {
-            var factoryName = $"{service.ClassName}__Factory";
+            var factoryName = GetFactoryName(service);
             var deps = service.Dependencies;
 
             sb.AppendLine($"    internal static class {factoryName}");
@@ -286,7 +286,7 @@ namespace Strada.SourceGeneration
 
             foreach (var service in services)
             {
-                var factoryName = $"{service.ClassName}__Factory";
+                var factoryName = GetFactoryName(service);
                 sb.AppendLine($"            DirectFactory<{service.TypeName}>.Register({factoryName}.Create);");
 
                 if (!string.IsNullOrEmpty(service.InterfaceType))
@@ -312,6 +312,21 @@ namespace Strada.SourceGeneration
 
             sb.AppendLine("        }");
             sb.AppendLine("    }");
+        }
+
+        // Combines the namespace and class name (sanitized) to avoid name collisions
+        // between generated factory classes for source-level types that share a class name.
+        // Example: "Game.Player" + "Foo" -> "Game_Player_Foo__Factory".
+        private static string GetFactoryName(ServiceInfo service)
+        {
+            var ns = service.Namespace ?? string.Empty;
+            var sanitized = new System.Text.StringBuilder(ns.Length + service.ClassName.Length + 16);
+            foreach (var c in ns)
+                sanitized.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+            if (sanitized.Length > 0) sanitized.Append('_');
+            sanitized.Append(service.ClassName);
+            sanitized.Append("__Factory");
+            return sanitized.ToString();
         }
 
         private enum ServiceLifetime

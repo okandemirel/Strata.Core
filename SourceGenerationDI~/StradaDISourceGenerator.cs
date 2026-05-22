@@ -195,7 +195,18 @@ namespace Strada.Core.SourceGen
 
         private string GetSafeName(string typeName)
         {
-            return typeName.Replace(".", "_").Replace("<", "_").Replace(">", "_");
+            // Map any non-identifier character to '_' so the result is a valid C# identifier.
+            // Covers '.', '<', '>', ',', ' ', '+', '[', ']', '&', and globally-qualified
+            // prefixes that may appear in fully-qualified display names.
+            if (string.IsNullOrEmpty(typeName)) return "_";
+            var chars = new System.Text.StringBuilder(typeName.Length);
+            foreach (var c in typeName)
+            {
+                chars.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+            }
+            // Ensure the identifier doesn't start with a digit.
+            if (chars.Length > 0 && char.IsDigit(chars[0])) chars.Insert(0, '_');
+            return chars.ToString();
         }
 
         private class ServiceSyntaxReceiver : ISyntaxReceiver

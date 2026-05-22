@@ -1459,7 +1459,8 @@ namespace Strada.Core.Editor.Windows
 
             try
             {
-                return Regex.IsMatch(typeName, regexPattern, RegexOptions.IgnoreCase);
+                return Regex.IsMatch(typeName, regexPattern, RegexOptions.IgnoreCase,
+                    TimeSpan.FromMilliseconds(100));
             }
             catch
             {

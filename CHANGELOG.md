@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+#### Editor tooling & source-generator hardening (Sprint 4)
+
+LOW severity follow-ups for editor and codegen attack surface (see
+[`SecurityReports/2026-05-22-low-status-review.md`](SecurityReports/2026-05-22-low-status-review.md)).
+
+- **Editor:** `BusDebuggerWindow.MatchesTypePattern` and
+  `BusDataProvider` wildcard filter regex now run with a 100 ms
+  `TimeSpan` matchTimeout — closes a ReDoS surface where a malicious
+  filter pattern could hang the editor's UI thread.
+- **Source generator (DI):** `StradaDISourceGenerator.GetSafeName` now
+  maps any non-identifier character to `_` (previously only `.`, `<`,
+  `>` were escaped). Prevents invalid C# identifiers from leaking into
+  generated method names for nested or generic types.
+- **Source generator (ECS):** Factory class names now incorporate the
+  service's full namespace (`Game_Player_Foo__Factory` instead of
+  `Foo__Factory`) — prevents collisions between same-named services in
+  different namespaces from generating duplicate class declarations.
+
 #### LOW severity quick-wins
 
 Sprint 3 — small-effort hardening for LOW findings identified in
@@ -111,6 +129,11 @@ Place this once anywhere in your assembly (commonly `AssemblyInfo.cs`).
 - New `SecurityReports/2026-05-22-low-status-review.md` — LOW severity
   audit status across 81 unique findings (44% already FIXED, 41 OPEN of
   which 10 are quick-win candidates).
+- New `SecurityReports/2026-05-22-major-api-plan-f8-f9.md` — coordinated
+  implementation plan for the deferred `EventBus` subscription-token and
+  `ReactiveProperty` `BindingScope` API refactors (target: next major
+  version). Documents migration phases, affected callers, test strategy,
+  and risk assessment.
 
 ## Earlier history
 
