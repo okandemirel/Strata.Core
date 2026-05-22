@@ -17,6 +17,23 @@ namespace Strada.Core.ECS.Jobs
         SetComponent
     }
 
+    /// <summary>
+    /// A deferred command buffer for recording ECS structural changes (create/destroy entity,
+    /// add/remove/set component) outside of safe iteration contexts.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Thread safety:</b> <see cref="EntityCommandBuffer"/> is <b>not thread-safe</b>.
+    /// Each instance is intended to be used by a single thread (or a single Burst job at a time).
+    /// To record commands from multiple worker threads concurrently, create one buffer per
+    /// worker and merge them at playback time, or wait for the planned <c>AsParallelWriter()</c>
+    /// API. Concurrent writes from multiple threads to the same buffer will corrupt the
+    /// internal command stream and cause undefined behavior during playback.</para>
+    /// <para><b>Playback:</b> <see cref="Playback"/> must run on the main thread; it mutates
+    /// <see cref="Strada.Core.ECS.Core.EntityManager"/> state which is itself not thread-safe.</para>
+    /// <para><b>Disposal:</b> The buffer owns native memory and must be disposed. Allocator
+    /// determines lifetime (e.g. <see cref="Unity.Collections.Allocator.TempJob"/> requires
+    /// disposal within 4 frames).</para>
+    /// </remarks>
     [BurstCompile]
     public unsafe struct EntityCommandBuffer : IDisposable
     {

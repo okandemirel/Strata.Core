@@ -22,6 +22,11 @@ namespace Strada.Core.DI.AutoBinding
         private static CacheSnapshot _cache;
         private static readonly object _lock = new();
 
+        // One-time deprecation warning tracking: assemblies that matched an include pattern
+        // but lack [assembly: AutoBindingScope]. In a future major release, scanning will
+        // refuse to process such assemblies and the warning will become a hard error.
+        private static readonly HashSet<string> _warnedAssemblies = new();
+
         public static void RegisterAll(
             IContainerBuilder builder,
             IReadOnlyList<string> includePatterns = null,
@@ -103,6 +108,8 @@ namespace Strada.Core.DI.AutoBinding
 
         private static void ScanAssembly(Assembly assembly, List<AutoBindingEntry> entries)
         {
+            WarnIfMissingScopeAttribute(assembly);
+
             foreach (var type in assembly.GetTypes())
             {
                 if (type.IsAbstract || type.IsInterface || type.IsGenericTypeDefinition)
@@ -112,6 +119,29 @@ namespace Strada.Core.DI.AutoBinding
                 if (entry != null)
                     entries.Add(entry);
             }
+        }
+
+        private static void WarnIfMissingScopeAttribute(Assembly assembly)
+        {
+            var asmName = assembly.GetName().Name;
+            if (string.IsNullOrEmpty(asmName)) return;
+
+            // Strada's own assemblies are implicitly trusted.
+            if (asmName.StartsWith("Strada.", StringComparison.OrdinalIgnoreCase)) return;
+
+            if (assembly.IsDefined(typeof(AutoBindingScopeAttribute), inherit: false)) return;
+
+            // Log once per assembly per session — repeated scans would otherwise spam the console.
+            lock (_warnedAssemblies)
+            {
+                if (!_warnedAssemblies.Add(asmName)) return;
+            }
+
+            UnityEngine.Debug.LogWarning(
+                $"[Strada AutoBinding] Assembly '{asmName}' matches an include pattern but lacks " +
+                "[assembly: AutoBindingScope]. Auto-binding without this attribute is deprecated " +
+                "and will become a hard error in a future major release. Add " +
+                "'[assembly: Strada.Core.DI.AutoBinding.AutoBindingScope]' to opt in explicitly.");
         }
 
         private static AutoBindingEntry TryCreateEntry(Type type)

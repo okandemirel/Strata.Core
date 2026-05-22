@@ -85,10 +85,11 @@ namespace Strada.Core.Editor.ModuleGenerator
             return path;
         }
 
-        public void SetTargetPath(string path)
+        public void SetTargetPath(string path, bool validate = true)
         {
-            if (_moduleDefinition != null)
-                _moduleDefinition.TargetPath = path;
+            if (_moduleDefinition == null) return;
+            _moduleDefinition.TargetPath = path;
+            if (validate) ValidateTargetPath();
         }
 
         private void OnEnable()

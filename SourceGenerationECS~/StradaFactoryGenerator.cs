@@ -287,11 +287,11 @@ namespace Strada.SourceGeneration
             foreach (var service in services)
             {
                 var factoryName = $"{service.ClassName}__Factory";
-                sb.AppendLine($"            DirectFactory<{service.TypeName}>.Delegate = {factoryName}.Create;");
+                sb.AppendLine($"            DirectFactory<{service.TypeName}>.Register({factoryName}.Create);");
 
                 if (!string.IsNullOrEmpty(service.InterfaceType))
                 {
-                    sb.AppendLine($"            DirectFactory<{service.InterfaceType}>.Delegate = {factoryName}.Create;");
+                    sb.AppendLine($"            DirectFactory<{service.InterfaceType}>.Register({factoryName}.Create);");
                 }
             }
 
@@ -303,10 +303,10 @@ namespace Strada.SourceGeneration
 
             foreach (var service in services)
             {
-                sb.AppendLine($"            DirectFactory<{service.TypeName}>.Delegate = null;");
+                sb.AppendLine($"            DirectFactory<{service.TypeName}>.Clear();");
                 if (!string.IsNullOrEmpty(service.InterfaceType))
                 {
-                    sb.AppendLine($"            DirectFactory<{service.InterfaceType}>.Delegate = null;");
+                    sb.AppendLine($"            DirectFactory<{service.InterfaceType}>.Clear();");
                 }
             }
 

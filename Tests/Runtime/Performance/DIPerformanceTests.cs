@@ -65,21 +65,21 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
         private void ClearAllDirectFactories()
         {
-            DirectFactory<SimpleService>.Delegate = null;
-            DirectFactory<ServiceA>.Delegate = null;
-            DirectFactory<ServiceB>.Delegate = null;
-            DirectFactory<ServiceC>.Delegate = null;
-            DirectFactory<ServiceD>.Delegate = null;
-            DirectFactory<WideService>.Delegate = null;
-            DirectFactory<DepOne>.Delegate = null;
-            DirectFactory<DepTwo>.Delegate = null;
-            DirectFactory<DepThree>.Delegate = null;
-            DirectFactory<DepFour>.Delegate = null;
-            DirectFactory<DepFive>.Delegate = null;
-            DirectFactory<IRepository>.Delegate = null;
-            DirectFactory<Repository>.Delegate = null;
-            DirectFactory<IDITestService>.Delegate = null;
-            DirectFactory<DITestService>.Delegate = null;
+            DirectFactory<SimpleService>.Clear();
+            DirectFactory<ServiceA>.Clear();
+            DirectFactory<ServiceB>.Clear();
+            DirectFactory<ServiceC>.Clear();
+            DirectFactory<ServiceD>.Clear();
+            DirectFactory<WideService>.Clear();
+            DirectFactory<DepOne>.Clear();
+            DirectFactory<DepTwo>.Clear();
+            DirectFactory<DepThree>.Clear();
+            DirectFactory<DepFour>.Clear();
+            DirectFactory<DepFive>.Clear();
+            DirectFactory<IRepository>.Clear();
+            DirectFactory<Repository>.Clear();
+            DirectFactory<IDITestService>.Clear();
+            DirectFactory<DITestService>.Clear();
         }
 
         [Test]

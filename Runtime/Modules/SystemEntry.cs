@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using Strada.Core.ECS;
 using Strada.Core.ECS.World;
 
 namespace Strada.Core.Modules
@@ -60,9 +61,11 @@ namespace Strada.Core.Modules
         public string Description => _description;
 
         /// <summary>
-        /// Gets the resolved Type of the system.
+        /// Gets the resolved Type of the system, validated against <see cref="ISystem"/>.
+        /// Returns <c>null</c> if the serialized type does not implement <see cref="ISystem"/>
+        /// (an error is logged in that case).
         /// </summary>
-        public Type GetSystemType() => _systemType?.Type;
+        public Type GetSystemType() => _systemType?.AsType<ISystem>();
 
         /// <summary>
         /// Gets whether this entry has a valid system type assigned.

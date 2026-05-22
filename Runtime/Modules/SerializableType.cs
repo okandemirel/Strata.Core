@@ -45,6 +45,28 @@ namespace Strada.Core.Modules
         public string AssemblyQualifiedName => _assemblyQualifiedName;
 
         /// <summary>
+        /// Resolves the type and returns it only if it is assignable to <typeparamref name="TBase"/>.
+        /// Returns <c>null</c> and logs an error otherwise.
+        /// </summary>
+        /// <remarks>
+        /// Use this method instead of the <see cref="Type"/> property when the consuming code
+        /// expects a specific base type or interface (defense-in-depth against tampered assets
+        /// or asset bundles that may carry an arbitrary assembly-qualified name).
+        /// </remarks>
+        public Type AsType<TBase>() where TBase : class
+        {
+            var resolved = Type;
+            if (resolved == null) return null;
+            if (!typeof(TBase).IsAssignableFrom(resolved))
+            {
+                Debug.LogError(
+                    $"[SerializableType] Type '{resolved.FullName}' is not assignable to {typeof(TBase).FullName}; rejected.");
+                return null;
+            }
+            return resolved;
+        }
+
+        /// <summary>
         /// Gets whether this SerializableType has a valid type assigned.
         /// </summary>
         public bool IsValid => Type != null;

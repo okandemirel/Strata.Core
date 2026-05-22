@@ -327,7 +327,31 @@ namespace Strada.Core.DI
                 }
                 else
                 {
-                    _factories[index] = rawFactory;
+                    // Transient: opt-in disposal tracking via [TrackTransientDisposal] attribute
+                    var typeForAttrCheck = reg.ImplementationType ?? reg.ServiceType;
+                    var trackDisposal = typeForAttrCheck != null
+                        && typeForAttrCheck.IsDefined(typeof(Strada.Core.DI.Attributes.TrackTransientDisposalAttribute), inherit: true);
+
+                    if (trackDisposal)
+                    {
+                        _factories[index] = _ =>
+                        {
+                            var instance = rawFactory(this);
+                            if (instance is IDisposable d)
+                            {
+                                lock (_lock)
+                                {
+                                    if (_disposed) { d.Dispose(); ThrowDisposed(); }
+                                    _disposalStack.Push(d);
+                                }
+                            }
+                            return instance;
+                        };
+                    }
+                    else
+                    {
+                        _factories[index] = rawFactory;
+                    }
                 }
             }
         }
@@ -341,7 +365,7 @@ namespace Strada.Core.DI
 
         private static Func<IIndexResolver, object> CreateDirectFactoryWrapper<T>(Container container) where T : class
         {
-            var factory = DirectFactory<T>.Delegate;
+            var factory = DirectFactory<T>.Get();
             if (factory == null) return null;
 
             return (resolver) => factory(resolver is IContainer c ? c : container);
@@ -405,7 +429,7 @@ namespace Strada.Core.DI
         }
 
         private static void ClearFactory(Type type) =>
-            typeof(DirectFactory<>).MakeGenericType(type).GetField(nameof(DirectFactory<object>.Delegate)).SetValue(null, null);
+            typeof(DirectFactory<>).MakeGenericType(type).GetMethod(nameof(DirectFactory<object>.Clear)).Invoke(null, null);
 
         private static class TypeId<T>
         {
