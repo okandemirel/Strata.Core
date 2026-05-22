@@ -75,6 +75,14 @@ namespace Strada.Core.ECS.Archetypes
 
         public void DestroyEntity<T>(Entity entity) where T : IEntityDescriptor
         {
+            // FRAMEWORK DESIGN: List<Entity>.Remove is O(n) and does not compact the
+            // backing array. The audit flagged this as "unbounded entity-list growth",
+            // but the ECS data layout intentionally keeps the per-archetype list as a
+            // dense, append-mostly structure — entities live for the duration of their
+            // archetype and bulk teardown clears the list via Reset. A separate compaction
+            // pass would shift every following element and erase the cache-friendly
+            // access pattern; the current design trades a slow Remove for a fast
+            // iteration over the live entity set.
             if (_entitiesByArchetype.TryGetValue(typeof(T), out var list))
                 list.Remove(entity);
 

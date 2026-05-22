@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+#### F8 + F9 caller migration (Phase 1, partial) + F10 generator hardening
+
+- **Patterns/Base** migrated to the token API: removed the
+  `_unsubscribes` Action list, `Subscribe<T>(handler)` now stores the
+  returned `SubscriptionToken` in `_disposables`, and `Dispose()` walks
+  the disposable list in LIFO order. Behavioural parity is preserved
+  for subclasses; this is a code-clarity refactor that exercises the
+  Phase 0 API end-to-end.
+- **EntityQueryGenerator (F10)** now emits an editor / debug-build
+  upper-bound check (`d{i} >= set{i}.Count` → `IndexOutOfRangeException`)
+  immediately before the unsafe pointer dereference in generated
+  `ForEach`. The check is compiled out under release builds, so the hot
+  iteration path is unchanged for shipping code. Define
+  `STRADA_ECS_BOUNDS_CHECK` to keep the check on in release.
+
+#### FRAMEWORK DESIGN markers (additional OPEN-BY-DESIGN annotations)
+
+Four more `// FRAMEWORK DESIGN:` comments added to document
+already-accepted design trade-offs surfaced by the audit:
+
+- `GameBootstrapper` static globals — single-World deliberate choice.
+- `ArchetypeManager.DestroyEntity` — `List<Entity>.Remove` without
+  compaction is intentional (dense, append-mostly archetype access
+  pattern).
+- Module-generator `AssemblyDefStep.WriteAsmdef` — generated `.asmdef`
+  emits `allowUnsafeCode: true` because Strada's ECS subsystem requires
+  unsafe pointer access.
+- `StradaEntityInspectorWindow` — editor-only reflection over runtime
+  internals is the canonical debug path.
+
 #### F8 + F9 token foundation (Phase 0)
 
 First step of the deferred subscription-token refactor (see

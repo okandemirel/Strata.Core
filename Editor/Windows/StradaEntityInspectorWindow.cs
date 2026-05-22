@@ -18,6 +18,14 @@ namespace Strada.Core.Editor.Windows
     /// component editing, and search functionality.
     /// Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
     /// </summary>
+    // FRAMEWORK DESIGN: The Entity Inspector reads runtime internals (entity versions,
+    // sparse-set dense arrays, component storages) via reflection. This is editor-only
+    // tooling — it never ships in player builds, so there is no perf or surface-area
+    // concern. The reflection is also why the inspector is the canonical place to debug
+    // ECS state without forcing every ECS type to expose a public debug API. If a piece
+    // of state becomes inspectable from production code, it should get a proper accessor
+    // and the inspector should switch to that — but reflection remains the right tool
+    // for editor-internal probes that don't justify a public contract.
     public class StradaEntityInspectorWindow : EditorWindow
     {
         /// <summary>

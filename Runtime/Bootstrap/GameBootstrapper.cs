@@ -20,6 +20,15 @@ namespace Strada.Core.Bootstrap
     /// Main entry point for initializing the Strada framework.
     /// Uses GameBootstrapperConfig with ModuleConfig ScriptableObjects.
     /// </summary>
+    /// <remarks>
+    /// FRAMEWORK DESIGN: GameBootstrapper exposes Container, Services, World, and Systems
+    /// as mutable static properties. This is a deliberate single-World design — Strada
+    /// currently supports exactly one bootstrapped World per process, and the static
+    /// access points are the public entry to that World from non-DI call sites (eg.
+    /// MonoBehaviours that did not go through the container). Multi-World support is
+    /// future work and would replace these with container-scoped lookups; until then,
+    /// the per-property "NOT thread-safe" remarks document the constraint.
+    /// </remarks>
     [DefaultExecutionOrder(-1000)]
     public class GameBootstrapper : MonoBehaviour
     {

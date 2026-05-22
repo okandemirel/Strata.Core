@@ -18,7 +18,6 @@ namespace Strada.Core.Patterns
     public abstract class Base : IInitializable, IDisposable
     {
         private readonly List<IDisposable> _disposables = new(4);
-        private readonly List<Action> _unsubscribes = new(4);
         private bool _initialized;
         private bool _disposed;
 
@@ -69,8 +68,11 @@ namespace Strada.Core.Patterns
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void Subscribe<T>(Action<T> handler) where T : struct
         {
-            EventBus?.Subscribe(handler);
-            _unsubscribes.Add(() => EventBus?.Unsubscribe(handler));
+            // Token-based lifecycle: EventBus.Subscribe returns a SubscriptionToken whose
+            // Dispose removes only this handler. Storing the token in _disposables means
+            // base Dispose() unsubscribes everything in LIFO order automatically.
+            var token = EventBus?.Subscribe(handler);
+            if (token != null) _disposables.Add(token);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -129,12 +131,9 @@ namespace Strada.Core.Patterns
 
             OnDispose();
 
-            foreach (var unsub in _unsubscribes)
-                unsub();
-            _unsubscribes.Clear();
-
-            foreach (var disposable in _disposables)
-                disposable.Dispose();
+            // Dispose in LIFO order so later-acquired resources release before earlier ones.
+            for (int i = _disposables.Count - 1; i >= 0; i--)
+                _disposables[i].Dispose();
             _disposables.Clear();
 
             GC.SuppressFinalize(this);

@@ -77,6 +77,13 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
             AssetDatabase.Refresh();
         }
 
+        // FRAMEWORK DESIGN: The generated .asmdef sets "allowUnsafeCode": true.
+        // Strada's ECS subsystem (SparseSet, EntityCommandBuffer, ParallelComponentJob)
+        // uses unsafe pointer access for Burst-compatible hot paths. Modules created from
+        // this generator are expected to interoperate with that ECS, so they share the
+        // same unsafe-code requirement. Modules that don't need unsafe code can edit
+        // the generated .asmdef to flip the flag back to false; the default favours the
+        // common case.
         private void WriteAsmdef(string path, string asmName, string rootNamespace,
             List<string> references, GenerationContext context,
             string[] includePlatforms = null,

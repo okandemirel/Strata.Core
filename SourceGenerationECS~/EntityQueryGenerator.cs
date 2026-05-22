@@ -123,6 +123,20 @@ namespace Strada.SourceGeneration
             }
             sb.AppendLine(") continue;");
 
+            // Editor / debug build: also reject d{i} >= set{i}.Count before the pointer
+            // dereference. SparseSet's invariant guarantees this in release builds; the
+            // check catches storage-corruption bugs during development without paying
+            // for the comparison in shipping code.
+            sb.AppendLine("#if STRADA_ECS_BOUNDS_CHECK || UNITY_EDITOR");
+            sb.Append("                    if (");
+            for (int i = 1; i <= n; i++)
+            {
+                if (i > 1) sb.Append(" || ");
+                sb.Append($"d{i} >= set{i}.Count");
+            }
+            sb.AppendLine(") throw new System.IndexOutOfRangeException(\"EntityQuery dense index out of bounds\");");
+            sb.AppendLine("#endif");
+
             sb.Append("                    action(e");
             for (int i = 1; i <= n; i++) sb.Append($", ref *(set{i}.GetDataPtr() + d{i})");
             sb.AppendLine(");");
