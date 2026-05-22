@@ -4,6 +4,12 @@ using NUnit.Framework;
 using Strada.Core.Commands;
 using Strada.Core.Communication;
 
+// These tests exercise the legacy Unsubscribe / Unregister API on purpose —
+// they verify that the [Obsolete] methods still behave correctly during the
+// deprecation period. They will be removed (or rewritten against the token
+// API) when the [Obsolete] methods are dropped in the next major release.
+#pragma warning disable CS0618
+
 namespace Strada.Core.Tests.Tests.Runtime.Communication
 {
     [TestFixture]

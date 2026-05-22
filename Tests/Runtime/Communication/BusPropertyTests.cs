@@ -5,6 +5,10 @@ using NUnit.Framework;
 using Strada.Core.Communication;
 using Strada.Core.Tests.Tests.Runtime.Generators;
 
+// Property-based tests intentionally exercise the legacy Unsubscribe API.
+// See MessageBusTests.cs for the deprecation rationale.
+#pragma warning disable CS0618
+
 namespace Strada.Core.Tests.Tests.Runtime.Communication
 {
     /// <summary>

@@ -1,6 +1,10 @@
 using NUnit.Framework;
 using Strada.Core.Sync;
 
+// Tests intentionally exercise the legacy Unsubscribe API on
+// IReadOnlyReactiveProperty<T> during the deprecation period.
+#pragma warning disable CS0618
+
 namespace Strada.Core.Tests.Tests.Runtime.Sync
 {
     [TestFixture]

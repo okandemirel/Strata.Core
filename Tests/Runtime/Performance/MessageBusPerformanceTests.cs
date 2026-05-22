@@ -3,6 +3,10 @@ using System.Diagnostics;
 using NUnit.Framework;
 using Strada.Core.Communication;
 
+// Benchmarks intentionally measure the legacy Subscribe/Unsubscribe cycle.
+// A token-based equivalent will be added when the legacy API is removed.
+#pragma warning disable CS0618
+
 namespace Strada.Core.Tests.Tests.Runtime.Performance
 {
     [TestFixture]

@@ -474,6 +474,44 @@ public interface ICommandHandler<TCommand> where TCommand : struct
 
 ---
 
+## Migration: legacy Unsubscribe → SubscriptionToken
+
+`EventBus` now returns a `Strada.Core.SubscriptionToken` from every
+`Subscribe` / `RegisterSignalHandler` / `RegisterQueryHandler` overload.
+Disposing the token removes the handler it represents — disposal is
+idempotent and thread-safe, and the signal/query overloads use
+`ReferenceEquals` so a stale token cannot clear a slot that has already
+been replaced.
+
+The legacy `Unsubscribe(handler)` / `UnregisterSignalHandler<T>()` /
+`UnregisterQueryHandler<TQuery,TResult>()` methods are marked
+`[Obsolete]` (warning-only) and remain functional during the deprecation
+period. They are scheduled for removal in the next major release.
+
+| Before (legacy) | After (token) |
+|-----------------|---------------|
+| `bus.Subscribe(handler); ... bus.Unsubscribe(handler);` | `var t = bus.Subscribe(handler); ... t.Dispose();` |
+| `bus.RegisterSignalHandler(h); ... bus.UnregisterSignalHandler<TSignal>();` | `var t = bus.RegisterSignalHandler(h); ... t.Dispose();` |
+| `bus.RegisterQueryHandler(h); ... bus.UnregisterQueryHandler<TQuery,TResult>();` | `var t = bus.RegisterQueryHandler(h); ... t.Dispose();` |
+
+Aggregate tokens with a `BindingScope`:
+
+```csharp
+var scope = new BindingScope();
+scope.Add(bus.Subscribe<HealthChanged>(OnHealthChanged));
+scope.Add(bus.RegisterSignalHandler<JumpRequest>(OnJump));
+// ... later (eg. in your controller's Dispose) ...
+scope.Dispose();   // releases both subscriptions in LIFO order
+```
+
+Pattern subclasses (`Patterns/Base`, `ECS/SystemBase`,
+`Sync/EntityMediator`) already capture the returned tokens internally
+and dispose them at the right point in their lifecycle — application
+code that uses those base classes does not need to manage tokens
+explicitly.
+
+---
+
 ## Related Documentation
 
 - [DI Container](DI.md) - Dependency injection

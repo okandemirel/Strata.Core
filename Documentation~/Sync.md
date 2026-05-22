@@ -772,6 +772,48 @@ void Dispose()
 
 ---
 
+## Migration: legacy Unsubscribe → SubscriptionToken
+
+`ReactiveProperty<T>.Subscribe` and `SubscribeAndInvoke` now return a
+`Strada.Core.SubscriptionToken`. Disposing the token removes the
+handler — disposal is idempotent. `IReadOnlyReactiveProperty<T>.Unsubscribe`
+is marked `[Obsolete]` and scheduled for removal in the next major
+release.
+
+| Before (legacy) | After (token) |
+|-----------------|---------------|
+| `property.Subscribe(h); ... property.Unsubscribe(h);` | `var t = property.Subscribe(h); ... t.Dispose();` |
+| `property.SubscribeAndInvoke(h); ... property.Unsubscribe(h);` | `var t = property.SubscribeAndInvoke(h); ... t.Dispose();` |
+
+If you have a property typed as the read-only interface
+(`IReadOnlyReactiveProperty<T>`), use the `SubscribeToken` extension to
+get a token regardless of the underlying object's concrete type:
+
+```csharp
+IReadOnlyReactiveProperty<int> health = enemy.Health;
+var token = health.SubscribeToken(OnHealthChanged);
+// ...
+token.Dispose();
+```
+
+Or aggregate with a `BindingScope`:
+
+```csharp
+var scope = new BindingScope();
+scope.Subscribe(player.Position, OnMove);
+scope.Add(enemy.Health.SubscribeToken(OnHealth));
+// ...
+scope.Dispose();   // releases all subscriptions in LIFO order
+```
+
+Derived reactive types (`MappedProperty`, `FilteredProperty`,
+`CombinedProperty`, `ThrottledProperty`, `DistinctProperty`,
+`PropertyBinding`, `ConvertedBinding`, `TwoWayBinding`,
+`ValidatedBinding`, `ComputedProperty`) already capture tokens
+internally and dispose them when their own `Dispose` runs.
+
+---
+
 ## Related Documentation
 
 - [DI Container](DI.md) - Dependency injection

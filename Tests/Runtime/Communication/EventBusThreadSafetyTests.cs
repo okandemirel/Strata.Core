@@ -4,6 +4,10 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using Strada.Core.Communication;
 
+// Thread-safety stress tests intentionally exercise the legacy Unsubscribe
+// API. See MessageBusTests.cs for the deprecation rationale.
+#pragma warning disable CS0618
+
 namespace Strada.Core.Tests.Communication
 {
     [TestFixture]

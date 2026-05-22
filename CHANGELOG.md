@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+#### Phase 2A — test suppression + doc migration tables
+
+- Test/benchmark files that deliberately exercise the legacy
+  `Unsubscribe` / `Unregister*` APIs (verifying they still behave
+  correctly during the deprecation period) now carry a file-level
+  `#pragma warning disable CS0618` with a comment explaining why. The
+  build is back to zero CS0618 warnings without losing test coverage
+  of the deprecated path. Files: `Tests/Runtime/Communication/MessageBusTests.cs`,
+  `BusPropertyTests.cs`, `EventBusThreadSafetyTests.cs`,
+  `Tests/Runtime/Sync/ReactivePropertyTests.cs`,
+  `Tests/Runtime/Performance/MessageBusPerformanceTests.cs`.
+- `Documentation~/Messaging.md` and `Documentation~/Sync.md` gained
+  "Migration: legacy Unsubscribe → SubscriptionToken" sections with
+  before/after tables and `BindingScope` aggregation examples.
+
 #### Signal/Query token API
 
 Extends the token foundation to the signal and query buses. The
