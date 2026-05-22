@@ -3,10 +3,6 @@ using System.Diagnostics;
 using NUnit.Framework;
 using Strada.Core.Communication;
 
-// Benchmarks intentionally measure the legacy Subscribe/Unsubscribe cycle.
-// A token-based equivalent will be added when the legacy API is removed.
-#pragma warning disable CS0618
-
 namespace Strada.Core.Tests.Tests.Runtime.Performance
 {
     [TestFixture]
@@ -160,37 +156,6 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
             Assert.AreEqual(Iterations * Subscribers, counter);
             Assert.Less(sw.ElapsedMilliseconds, 50, "Event publish with 10 subscribers too slow (Target: <50ms for 100k)");
-        }
-
-        [Test]
-        public void Benchmark_Subscribe_Unsubscribe_Cycles()
-        {
-            const int Iterations = 10000;
-            const int Warmup = 100;
-
-            Action<BenchmarkEvent> handler = _ => { };
-
-            for (int i = 0; i < Warmup; i++)
-            {
-                _bus.Subscribe(handler);
-                _bus.Unsubscribe(handler);
-            }
-
-            var sw = Stopwatch.StartNew();
-            for (int i = 0; i < Iterations; i++)
-            {
-                _bus.Subscribe(handler);
-                _bus.Unsubscribe(handler);
-            }
-            sw.Stop();
-
-            double avgMicroseconds = sw.Elapsed.TotalMilliseconds * 1000 / Iterations;
-
-            UnityEngine.Debug.Log($"[MessageBus] Subscribe/Unsubscribe Cycles ({Iterations} cycles):");
-            UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
-            UnityEngine.Debug.Log($"  Avg: {avgMicroseconds:F2}us per cycle");
-
-            Assert.Less(sw.ElapsedMilliseconds, 100, "Subscribe/Unsubscribe too slow (Target: <100ms for 10k)");
         }
 
         [Test]

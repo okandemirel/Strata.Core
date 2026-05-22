@@ -4,10 +4,6 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using Strada.Core.Communication;
 
-// Thread-safety stress tests intentionally exercise the legacy Unsubscribe
-// API. See MessageBusTests.cs for the deprecation rationale.
-#pragma warning disable CS0618
-
 namespace Strada.Core.Tests.Communication
 {
     [TestFixture]
@@ -88,38 +84,6 @@ namespace Strada.Core.Tests.Communication
             }
 
             Assert.DoesNotThrow(() => Task.WaitAll(tasks));
-        }
-
-        [Test]
-        public void Unsubscribe_ConcurrentUnsubscriptions_DoesNotThrow()
-        {
-            const int handlerCount = 40;
-            var handlers = new Action<TestEvent>[handlerCount];
-
-            for (int i = 0; i < handlerCount; i++)
-            {
-                handlers[i] = e => { };
-                _bus.Subscribe(handlers[i]);
-            }
-
-            const int threadCount = 4;
-            var tasks = new Task[threadCount];
-            var handlerIndex = 0;
-
-            for (int t = 0; t < threadCount; t++)
-            {
-                tasks[t] = Task.Run(() =>
-                {
-                    int index;
-                    while ((index = Interlocked.Increment(ref handlerIndex) - 1) < handlerCount)
-                    {
-                        _bus.Unsubscribe(handlers[index]);
-                    }
-                });
-            }
-
-            Task.WaitAll(tasks);
-            Assert.AreEqual(0, _bus.GetSubscriberCount<TestEvent>());
         }
 
         [Test]

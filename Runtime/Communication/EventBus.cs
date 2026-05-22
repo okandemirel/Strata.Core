@@ -34,9 +34,8 @@ namespace Strada.Core.Communication
     {
         void Send<TSignal>(ref TSignal signal) where TSignal : struct;
         void Send<TSignal>(TSignal signal) where TSignal : struct;
-        void RegisterSignalHandler<TSignal>(Action<TSignal> handler) where TSignal : struct;
-        void RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) where TSignal : struct;
-        void UnregisterSignalHandler<TSignal>() where TSignal : struct;
+        Strada.Core.SubscriptionToken RegisterSignalHandler<TSignal>(Action<TSignal> handler) where TSignal : struct;
+        Strada.Core.SubscriptionToken RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) where TSignal : struct;
         bool HasSignalHandler<TSignal>() where TSignal : struct;
         ValueTask SendAsync<TSignal>(TSignal signal, CancellationToken cancellationToken = default) where TSignal : struct;
         void RegisterAsyncSignalHandler<TSignal>(IAsyncSignalHandler<TSignal> handler) where TSignal : struct;
@@ -50,9 +49,8 @@ namespace Strada.Core.Communication
     {
         TResult Query<TQuery, TResult>(ref TQuery query) where TQuery : struct, IQuery<TResult>;
         TResult Query<TQuery, TResult>(TQuery query) where TQuery : struct, IQuery<TResult>;
-        void RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler) where TQuery : struct, IQuery<TResult>;
-        void RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler) where TQuery : struct, IQuery<TResult>;
-        void UnregisterQueryHandler<TQuery, TResult>() where TQuery : struct, IQuery<TResult>;
+        Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler) where TQuery : struct, IQuery<TResult>;
+        Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler) where TQuery : struct, IQuery<TResult>;
         ValueTask<TResult> QueryAsync<TQuery, TResult>(TQuery query, CancellationToken cancellationToken = default) where TQuery : struct, IAsyncQuery<TResult>;
         void RegisterAsyncQueryHandler<TQuery, TResult>(IAsyncQueryHandler<TQuery, TResult> handler) where TQuery : struct, IAsyncQuery<TResult>;
         void RegisterAsyncQueryHandler<TQuery, TResult>(Func<TQuery, CancellationToken, ValueTask<TResult>> handler) where TQuery : struct, IAsyncQuery<TResult>;
@@ -65,8 +63,7 @@ namespace Strada.Core.Communication
     {
         void Publish<TEvent>(ref TEvent message) where TEvent : struct;
         void Publish<TEvent>(TEvent message) where TEvent : struct;
-        void Subscribe<TEvent>(Action<TEvent> handler) where TEvent : struct;
-        void Unsubscribe<TEvent>(Action<TEvent> handler) where TEvent : struct;
+        Strada.Core.SubscriptionToken Subscribe<TEvent>(Action<TEvent> handler) where TEvent : struct;
         int GetSubscriberCount<TEvent>() where TEvent : struct;
     }
 
@@ -197,28 +194,6 @@ namespace Strada.Core.Communication
             return RegisterSignalHandler<TSignal>(handler.Handle);
         }
 
-        // Explicit interface implementation preserves the ISignalBus.RegisterSignalHandler
-        // void contract for callers that go through the interface.
-        void ISignalBus.RegisterSignalHandler<TSignal>(Action<TSignal> handler) => RegisterSignalHandler(handler);
-
-        void ISignalBus.RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) => RegisterSignalHandler(handler);
-
-        [Obsolete("Dispose the SubscriptionToken returned by RegisterSignalHandler instead. " +
-                  "This method clears the slot unconditionally and will be removed in the next major release.",
-                  error: false)]
-        public void UnregisterSignalHandler<TSignal>() where TSignal : struct
-        {
-            if (_disposed) ThrowDisposed();
-
-            lock (_lock)
-            {
-                var id = SignalTypeId<TSignal>.Id;
-                var handlers = _signalHandlers;
-                if (id < handlers.Length)
-                    Volatile.Write(ref handlers[id], null);
-            }
-        }
-
         public bool HasSignalHandler<TSignal>() where TSignal : struct
         {
             if (_disposed) return false;
@@ -268,34 +243,10 @@ namespace Strada.Core.Communication
             return RegisterQueryHandler(new DelegateQueryHandler<TQuery, TResult>(handler));
         }
 
-        // Explicit interface implementation preserves the IQueryBus.RegisterQueryHandler
-        // void contract for callers that go through the interface.
-        void IQueryBus.RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler) => RegisterQueryHandler(handler);
-
-        void IQueryBus.RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler) => RegisterQueryHandler(handler);
-
-        [Obsolete("Dispose the SubscriptionToken returned by RegisterQueryHandler instead. " +
-                  "This method clears the slot unconditionally and will be removed in the next major release.",
-                  error: false)]
-        public void UnregisterQueryHandler<TQuery, TResult>() where TQuery : struct, IQuery<TResult>
-        {
-            if (_disposed) ThrowDisposed();
-
-            lock (_lock)
-            {
-                var id = QueryTypeId<TQuery>.Id;
-                var handlers = _queryHandlers;
-                if (id < handlers.Length)
-                    Volatile.Write(ref handlers[id], null);
-            }
-        }
-
         /// <summary>
         /// Subscribes <paramref name="handler"/> to events of type <typeparamref name="TEvent"/>
         /// and returns a <see cref="Strada.Core.SubscriptionToken"/> that, when disposed,
-        /// removes exactly this handler. Callers that ignore the return value retain the
-        /// previous behaviour and must call <see cref="Unsubscribe{TEvent}(Action{TEvent})"/>
-        /// to remove the handler later.
+        /// removes exactly this handler.
         /// </summary>
         public Strada.Core.SubscriptionToken Subscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
         {
@@ -317,25 +268,13 @@ namespace Strada.Core.Communication
             }
 
             channel.Subscribe(handler);
-            return new Strada.Core.SubscriptionToken(() => Unsubscribe(handler));
-        }
-
-        // Explicit interface implementation preserves the IEventPublisher.Subscribe void contract
-        // for callers that go through the interface. The class-level Subscribe returns a token.
-        void IEventPublisher.Subscribe<TEvent>(Action<TEvent> handler) => Subscribe(handler);
-
-        [Obsolete("Dispose the SubscriptionToken returned by Subscribe<TEvent> instead. " +
-                  "Unsubscribe-by-reference will be removed in the next major release.",
-                  error: false)]
-        public void Unsubscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
-        {
-            if (_disposed) return;
-
-            var id = EventTypeId<TEvent>.Id;
-            var channels = Volatile.Read(ref _eventChannels);
-            if (id >= channels.Length) return;
-
-            (channels[id] as EventChannel<TEvent>)?.Unsubscribe(handler);
+            return new Strada.Core.SubscriptionToken(() =>
+            {
+                if (_disposed) return;
+                var channels = Volatile.Read(ref _eventChannels);
+                if (id >= channels.Length) return;
+                (channels[id] as EventChannel<TEvent>)?.Unsubscribe(handler);
+            });
         }
 
         public int GetSubscriberCount<TEvent>() where TEvent : struct

@@ -31,7 +31,7 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Subscribe<T>(IReadOnlyReactiveProperty<T> property, Action<T> handler)
         {
-            _disposables.Add(property.SubscribeToken(handler));
+            _disposables.Add(property.Subscribe(handler));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

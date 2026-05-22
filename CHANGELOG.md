@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING CHANGES — Phase 2B (v2.0)
+
+**This release drops the legacy reference-based unsubscribe API.** The
+following methods are removed from public interfaces and the `EventBus`
+/ `ReactiveProperty` classes:
+
+- `IReadOnlyReactiveProperty<T>.Unsubscribe(Action<T>)`
+- `IEventPublisher.Unsubscribe<TEvent>(Action<TEvent>)`
+- `ISignalBus.UnregisterSignalHandler<TSignal>()`
+- `IQueryBus.UnregisterQueryHandler<TQuery, TResult>()`
+
+Interface signatures changed (binary break for external implementers):
+
+- `IReadOnlyReactiveProperty<T>.Subscribe`, `IEventPublisher.Subscribe`,
+  `ISignalBus.RegisterSignalHandler` (×2 overloads), and
+  `IQueryBus.RegisterQueryHandler` (×2 overloads) now return
+  `Strada.Core.SubscriptionToken` instead of `void`.
+
+Migration: replace `bus.Unsubscribe(handler)` / `property.Unsubscribe(h)`
+/ `UnregisterSignalHandler<T>()` etc. with `token.Dispose()` where
+`token` is the value returned by the matching `Subscribe` /
+`RegisterSignalHandler` / `RegisterQueryHandler` call. See
+`Documentation~/Messaging.md` and `Documentation~/Sync.md` for the
+before/after table.
+
+Internal helpers removed: `ReactivePropertySubscriptionExtensions.SubscribeToken<T>`
+extension and all explicit interface implementations in `EventBus` and
+`ReactiveProperty<T>` are gone (no longer needed once the interface
+returns the token directly).
+
+Package version bumped from `1.0.0-alpha.1` to `2.0.0-alpha.1`.
+
 ### Security
 
 #### Phase 2A — test suppression + doc migration tables

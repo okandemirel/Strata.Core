@@ -28,6 +28,7 @@ namespace Strada.Core.Tests.Benchmarks
         {
             const int iterations = 1000;
             Action<TestEvent>[] handlers = new Action<TestEvent>[iterations];
+            var tokens = new Strada.Core.SubscriptionToken[iterations];
 
             for (int i = 0; i < iterations; i++)
             {
@@ -37,18 +38,18 @@ namespace Strada.Core.Tests.Benchmarks
             // Warmup
             for (int i = 0; i < 100; i++)
             {
-                _bus.Subscribe(handlers[i]);
+                tokens[i] = _bus.Subscribe(handlers[i]);
             }
             for (int i = 0; i < 100; i++)
             {
-                _bus.Unsubscribe(handlers[i]);
+                tokens[i].Dispose();
             }
 
             // Benchmark subscribe
             var swSubscribe = Stopwatch.StartNew();
             for (int i = 0; i < iterations; i++)
             {
-                _bus.Subscribe(handlers[i]);
+                tokens[i] = _bus.Subscribe(handlers[i]);
             }
             swSubscribe.Stop();
 
@@ -56,7 +57,7 @@ namespace Strada.Core.Tests.Benchmarks
             var swUnsubscribe = Stopwatch.StartNew();
             for (int i = iterations - 1; i >= 0; i--)
             {
-                _bus.Unsubscribe(handlers[i]);
+                tokens[i].Dispose();
             }
             swUnsubscribe.Stop();
 

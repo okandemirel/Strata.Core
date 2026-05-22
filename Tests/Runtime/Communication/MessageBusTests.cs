@@ -4,12 +4,6 @@ using NUnit.Framework;
 using Strada.Core.Commands;
 using Strada.Core.Communication;
 
-// These tests exercise the legacy Unsubscribe / Unregister API on purpose —
-// they verify that the [Obsolete] methods still behave correctly during the
-// deprecation period. They will be removed (or rewritten against the token
-// API) when the [Obsolete] methods are dropped in the next major release.
-#pragma warning disable CS0618
-
 namespace Strada.Core.Tests.Tests.Runtime.Communication
 {
     [TestFixture]
@@ -200,47 +194,6 @@ namespace Strada.Core.Tests.Tests.Runtime.Communication
 
             _bus.Subscribe<TestEvent>(_ => { });
             Assert.AreEqual(2, _bus.GetSubscriberCount<TestEvent>());
-        }
-
-        [Test]
-        public void Unsubscribe_RemovesHandler()
-        {
-            int callCount = 0;
-            Action<TestEvent> handler = _ => callCount++;
-
-            _bus.Subscribe(handler);
-            _bus.Publish(new TestEvent());
-            Assert.AreEqual(1, callCount);
-
-            _bus.Unsubscribe(handler);
-            _bus.Publish(new TestEvent());
-            Assert.AreEqual(1, callCount);
-        }
-
-        [Test]
-        public void Unsubscribe_OnlyRemovesSpecificHandler()
-        {
-            int handler1Count = 0;
-            int handler2Count = 0;
-            Action<TestEvent> handler1 = _ => handler1Count++;
-            Action<TestEvent> handler2 = _ => handler2Count++;
-
-            _bus.Subscribe(handler1);
-            _bus.Subscribe(handler2);
-            _bus.Unsubscribe(handler1);
-
-            _bus.Publish(new TestEvent());
-
-            Assert.AreEqual(0, handler1Count);
-            Assert.AreEqual(1, handler2Count);
-        }
-
-        [Test]
-        public void Unsubscribe_NonExistentHandler_DoesNotThrow()
-        {
-            Action<TestEvent> handler = _ => { };
-
-            Assert.DoesNotThrow(() => _bus.Unsubscribe(handler));
         }
 
         [Test]

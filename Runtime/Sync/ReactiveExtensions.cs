@@ -94,7 +94,7 @@ namespace Strada.Core.Sync
             _source = source;
             _selector = selector;
             _cachedValue = _selector(_source.Value);
-            _sourceToken = _source.SubscribeToken(OnSourceChanged);
+            _sourceToken = _source.Subscribe(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -105,8 +105,12 @@ namespace Strada.Core.Sync
                 _handlers[i](_cachedValue);
         }
 
-        public void Subscribe(Action<TResult> handler) => _handlers.Add(handler);
-        public void Unsubscribe(Action<TResult> handler) => _handlers.Remove(handler);
+        public Strada.Core.SubscriptionToken Subscribe(Action<TResult> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => _handlers.Remove(handler));
+        }
 
         public void Dispose()
         {
@@ -138,7 +142,7 @@ namespace Strada.Core.Sync
             _predicate = predicate;
             if (_predicate(_source.Value))
                 _lastValidValue = _source.Value;
-            _sourceToken = _source.SubscribeToken(OnSourceChanged);
+            _sourceToken = _source.Subscribe(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -150,8 +154,12 @@ namespace Strada.Core.Sync
                 _handlers[i](value);
         }
 
-        public void Subscribe(Action<T> handler) => _handlers.Add(handler);
-        public void Unsubscribe(Action<T> handler) => _handlers.Remove(handler);
+        public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => _handlers.Remove(handler));
+        }
 
         public void Dispose()
         {
@@ -188,8 +196,8 @@ namespace Strada.Core.Sync
             _source2 = source2;
             _combiner = combiner;
             _cachedValue = _combiner(_source1.Value, _source2.Value);
-            _source1Token = _source1.SubscribeToken(OnSource1Changed);
-            _source2Token = _source2.SubscribeToken(OnSource2Changed);
+            _source1Token = _source1.Subscribe(OnSource1Changed);
+            _source2Token = _source2.Subscribe(OnSource2Changed);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -206,8 +214,12 @@ namespace Strada.Core.Sync
                 _handlers[i](_cachedValue);
         }
 
-        public void Subscribe(Action<TResult> handler) => _handlers.Add(handler);
-        public void Unsubscribe(Action<TResult> handler) => _handlers.Remove(handler);
+        public Strada.Core.SubscriptionToken Subscribe(Action<TResult> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => _handlers.Remove(handler));
+        }
 
         public void Dispose()
         {
@@ -249,9 +261,9 @@ namespace Strada.Core.Sync
             _source3 = source3;
             _combiner = combiner;
             _cachedValue = _combiner(_source1.Value, _source2.Value, _source3.Value);
-            _source1Token = _source1.SubscribeToken(OnSource1Changed);
-            _source2Token = _source2.SubscribeToken(OnSource2Changed);
-            _source3Token = _source3.SubscribeToken(OnSource3Changed);
+            _source1Token = _source1.Subscribe(OnSource1Changed);
+            _source2Token = _source2.Subscribe(OnSource2Changed);
+            _source3Token = _source3.Subscribe(OnSource3Changed);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -269,8 +281,12 @@ namespace Strada.Core.Sync
                 _handlers[i](_cachedValue);
         }
 
-        public void Subscribe(Action<TResult> handler) => _handlers.Add(handler);
-        public void Unsubscribe(Action<TResult> handler) => _handlers.Remove(handler);
+        public Strada.Core.SubscriptionToken Subscribe(Action<TResult> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => _handlers.Remove(handler));
+        }
 
         public void Dispose()
         {
@@ -307,7 +323,7 @@ namespace Strada.Core.Sync
             _interval = intervalSeconds;
             _lastEmittedValue = _source.Value;
             _lastEmitTime = UnityEngine.Time.realtimeSinceStartup;
-            _sourceToken = _source.SubscribeToken(OnSourceChanged);
+            _sourceToken = _source.Subscribe(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -339,8 +355,12 @@ namespace Strada.Core.Sync
                 _handlers[i](_lastEmittedValue);
         }
 
-        public void Subscribe(Action<T> handler) => _handlers.Add(handler);
-        public void Unsubscribe(Action<T> handler) => _handlers.Remove(handler);
+        public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => _handlers.Remove(handler));
+        }
 
         public void Dispose()
         {
@@ -370,7 +390,7 @@ namespace Strada.Core.Sync
         {
             _source = source;
             _lastValue = _source.Value;
-            _sourceToken = _source.SubscribeToken(OnSourceChanged);
+            _sourceToken = _source.Subscribe(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -382,8 +402,12 @@ namespace Strada.Core.Sync
                 _handlers[i](value);
         }
 
-        public void Subscribe(Action<T> handler) => _handlers.Add(handler);
-        public void Unsubscribe(Action<T> handler) => _handlers.Remove(handler);
+        public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => _handlers.Remove(handler));
+        }
 
         public void Dispose()
         {
@@ -406,7 +430,7 @@ namespace Strada.Core.Sync
             _source = source;
             _target = target;
             _target.SetWithoutNotify(_source.Value);
-            _sourceToken = _source.SubscribeToken(OnSourceChanged);
+            _sourceToken = _source.Subscribe(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -437,7 +461,7 @@ namespace Strada.Core.Sync
             _target = target;
             _converter = converter;
             _target.SetWithoutNotify(_converter(_source.Value));
-            _sourceToken = _source.SubscribeToken(OnSourceChanged);
+            _sourceToken = _source.Subscribe(OnSourceChanged);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

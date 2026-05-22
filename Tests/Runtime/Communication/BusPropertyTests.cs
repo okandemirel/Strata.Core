@@ -5,10 +5,6 @@ using NUnit.Framework;
 using Strada.Core.Communication;
 using Strada.Core.Tests.Tests.Runtime.Generators;
 
-// Property-based tests intentionally exercise the legacy Unsubscribe API.
-// See MessageBusTests.cs for the deprecation rationale.
-#pragma warning disable CS0618
-
 namespace Strada.Core.Tests.Tests.Runtime.Communication
 {
     /// <summary>
@@ -308,128 +304,6 @@ namespace Strada.Core.Tests.Tests.Runtime.Communication
                     }
 
                     return true;
-                });
-
-            property.Check(config);
-        }
-
-        /// <summary>
-        /// **Feature: strada-codebase-audit, Property 13: Unsubscribe Effectiveness**
-        /// For any handler that has been unsubscribed, subsequent event publications
-        /// SHALL NOT invoke that handler.
-        /// **Validates: Requirements 4.4**
-        /// </summary>
-        [Test]
-        public void UnsubscribeEffectiveness_UnsubscribedHandlerNotInvoked()
-        {
-            var config = PropertyTestConfig.CreateConfig();
-
-            var property = Prop.ForAll(
-                PublishCountGen.ToArbitrary(),
-                (publishCount) =>
-                {
-                    using var bus = new EventBus();
-                    int invokeCount = 0;
-                    Action<TestEvent> handler = _ => invokeCount++;
-
-                    bus.Subscribe(handler);
-
-                    bus.Publish(new TestEvent { Value = 1 });
-                    int countBeforeUnsubscribe = invokeCount;
-
-                    bus.Unsubscribe(handler);
-
-                    for (int i = 0; i < publishCount; i++)
-                    {
-                        bus.Publish(new TestEvent { Value = i + 2 });
-                    }
-
-                    return countBeforeUnsubscribe == 1 && invokeCount == 1;
-                });
-
-            property.Check(config);
-        }
-
-        /// <summary>
-        /// **Feature: strada-codebase-audit, Property 13: Unsubscribe Effectiveness**
-        /// Additional test: Unsubscribing one handler doesn't affect others.
-        /// **Validates: Requirements 4.4**
-        /// </summary>
-        [Test]
-        public void UnsubscribeEffectiveness_OtherHandlersStillReceive()
-        {
-            var config = PropertyTestConfig.CreateConfig();
-
-            var property = Prop.ForAll(
-                SubscriberCountGen.ToArbitrary(),
-                PublishCountGen.ToArbitrary(),
-                (subscriberCount, publishCount) =>
-                {
-                    if (subscriberCount < 2) subscriberCount = 2;
-
-                    using var bus = new EventBus();
-                    var invokeCounts = new int[subscriberCount];
-                    var handlers = new Action<TestEvent>[subscriberCount];
-
-                    for (int i = 0; i < subscriberCount; i++)
-                    {
-                        int index = i;
-                        handlers[i] = _ => invokeCounts[index]++;
-                        bus.Subscribe(handlers[i]);
-                    }
-
-                    bus.Unsubscribe(handlers[0]);
-
-                    for (int p = 0; p < publishCount; p++)
-                    {
-                        bus.Publish(new TestEvent { Value = p });
-                    }
-
-                    if (invokeCounts[0] != 0)
-                        return false;
-
-                    for (int i = 1; i < subscriberCount; i++)
-                    {
-                        if (invokeCounts[i] != publishCount)
-                            return false;
-                    }
-
-                    return true;
-                });
-
-            property.Check(config);
-        }
-
-        /// <summary>
-        /// **Feature: strada-codebase-audit, Property 13: Unsubscribe Effectiveness**
-        /// Additional test: Subscriber count decreases after unsubscribe.
-        /// **Validates: Requirements 4.4**
-        /// </summary>
-        [Test]
-        public void UnsubscribeEffectiveness_SubscriberCountDecreases()
-        {
-            var config = PropertyTestConfig.CreateConfig();
-
-            var property = Prop.ForAll(
-                SubscriberCountGen.ToArbitrary(),
-                (subscriberCount) =>
-                {
-                    using var bus = new EventBus();
-                    var handlers = new Action<TestEvent>[subscriberCount];
-
-                    for (int i = 0; i < subscriberCount; i++)
-                    {
-                        handlers[i] = _ => { };
-                        bus.Subscribe(handlers[i]);
-                    }
-
-                    int countBefore = bus.GetSubscriberCount<TestEvent>();
-
-                    bus.Unsubscribe(handlers[0]);
-
-                    int countAfter = bus.GetSubscriberCount<TestEvent>();
-
-                    return countBefore == subscriberCount && countAfter == subscriberCount - 1;
                 });
 
             property.Check(config);

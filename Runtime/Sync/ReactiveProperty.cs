@@ -7,47 +7,7 @@ namespace Strada.Core.Sync
     public interface IReadOnlyReactiveProperty<T>
     {
         T Value { get; }
-        void Subscribe(Action<T> handler);
-
-        /// <summary>
-        /// Removes the given handler. Prefer disposing the
-        /// <see cref="Strada.Core.SubscriptionToken"/> returned by
-        /// <see cref="ReactiveProperty{T}.Subscribe(Action{T})"/> instead — disposal is
-        /// idempotent and aggregates cleanly into a <see cref="BindingScope"/>.
-        /// </summary>
-        [Obsolete("Dispose the SubscriptionToken returned by Subscribe instead. " +
-                  "Unsubscribe-by-reference will be removed in the next major release.",
-                  error: false)]
-        void Unsubscribe(Action<T> handler);
-    }
-
-    /// <summary>
-    /// Helper that returns a <see cref="Strada.Core.SubscriptionToken"/> from any
-    /// <see cref="IReadOnlyReactiveProperty{T}"/>, even when the static type is the
-    /// interface (whose explicit <c>Subscribe</c> implementation returns <c>void</c>).
-    /// </summary>
-    public static class ReactivePropertySubscriptionExtensions
-    {
-        public static Strada.Core.SubscriptionToken SubscribeToken<T>(
-            this IReadOnlyReactiveProperty<T> property,
-            Action<T> handler)
-        {
-            if (property == null) throw new ArgumentNullException(nameof(property));
-            if (handler == null) throw new ArgumentNullException(nameof(handler));
-
-            // Concrete ReactiveProperty<T>'s class-level Subscribe already returns a token —
-            // prefer it when we can see the concrete type.
-            if (property is ReactiveProperty<T> concrete)
-                return concrete.Subscribe(handler);
-
-            // Interface fallback. Re-route through the explicit interface impl (void) and
-            // synthesise a token that calls Unsubscribe on dispose. The call to the
-            // [Obsolete] Unsubscribe is intentional — this helper is the migration path.
-#pragma warning disable CS0618
-            property.Subscribe(handler);
-            return new Strada.Core.SubscriptionToken(() => property.Unsubscribe(handler));
-#pragma warning restore CS0618
-        }
+        Strada.Core.SubscriptionToken Subscribe(Action<T> handler);
     }
 
     /// <remarks>
@@ -106,10 +66,6 @@ namespace Strada.Core.Sync
             _handlers.Add(handler);
             return new Strada.Core.SubscriptionToken(() => Unsubscribe(handler));
         }
-
-        // Explicit interface implementation preserves the IReadOnlyReactiveProperty<T>.Subscribe
-        // void contract for callers that go through the interface.
-        void IReadOnlyReactiveProperty<T>.Subscribe(Action<T> handler) => Subscribe(handler);
 
         /// <summary>
         /// Subscribes <paramref name="handler"/>, invokes it once with the current value,

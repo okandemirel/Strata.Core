@@ -9,7 +9,6 @@ namespace Strada.Core.Sync
     public sealed class ComputedProperty<T> : IReadOnlyReactiveProperty<T>, IDisposable
     {
         private static readonly ConcurrentDictionary<Type, MethodInfo> s_subscribeMethodCache = new();
-        private static readonly ConcurrentDictionary<Type, MethodInfo> s_unsubscribeMethodCache = new();
         private static readonly ConcurrentDictionary<Type, MethodInfo> s_invalidateMethodCache = new();
         private static readonly MethodInfo s_invalidateIgnoreParamMethod = typeof(ComputedProperty<T>)
             .GetMethod("InvalidateIgnoreParam", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -154,8 +153,8 @@ namespace Strada.Core.Sync
                 {
                     var depType = iface.GetGenericArguments()[0];
 
-                    // Get or cache Subscribe method
-                    var subscribeMethod = s_subscribeMethodCache.GetOrAdd(type, t => t.GetMethod("Subscribe"));
+                    // Resolve the interface Subscribe(Action<TDep>) method which returns SubscriptionToken.
+                    var subscribeMethod = s_subscribeMethodCache.GetOrAdd(iface, i => i.GetMethod("Subscribe"));
 
                     // Get or cache the generic InvalidateIgnoreParam method
                     var invalidateMethod = s_invalidateMethodCache.GetOrAdd(depType,
@@ -165,11 +164,8 @@ namespace Strada.Core.Sync
                     var handlerType = typeof(Action<>).MakeGenericType(depType);
                     var handler = Delegate.CreateDelegate(handlerType, this, invalidateMethod);
 
-                    subscribeMethod.Invoke(dependency, new object[] { handler });
-
-                    // Get or cache Unsubscribe method
-                    var unsubscribeMethod = s_unsubscribeMethodCache.GetOrAdd(type, t => t.GetMethod("Unsubscribe"));
-                    _subscriptions.Add(new UntypedDependencySubscription(dependency, unsubscribeMethod, handler));
+                    var token = (IDisposable)subscribeMethod.Invoke(dependency, new object[] { handler });
+                    _subscriptions.Add(token);
                     return;
                 }
             }
@@ -180,10 +176,9 @@ namespace Strada.Core.Sync
         private void WatchDependency<TDep>(IReadOnlyReactiveProperty<TDep> dependency)
         {
             Action<TDep> handler = _ => Invalidate();
-            // SubscribeToken returns an IDisposable that mirrors the old DependencySubscription
-            // wrapper, but is allocated by the underlying ReactiveProperty itself (zero extra
-            // wrapper objects on the concrete-type fast path).
-            _subscriptions.Add(dependency.SubscribeToken(handler));
+            // Subscribe returns a SubscriptionToken (IDisposable) directly from the
+            // interface — zero extra wrapper objects on the concrete-type fast path.
+            _subscriptions.Add(dependency.Subscribe(handler));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -200,18 +195,21 @@ namespace Strada.Core.Sync
             }
         }
 
-        public void Subscribe(Action<T> handler) => _handlers.Add(handler);
-
-        public void Unsubscribe(Action<T> handler)
+        public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
         {
-            for (int i = _handlers.Count - 1; i >= 0; i--)
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() =>
             {
-                if (ReferenceEquals(_handlers[i], handler))
+                for (int i = _handlers.Count - 1; i >= 0; i--)
                 {
-                    _handlers.RemoveAt(i);
-                    break;
+                    if (ReferenceEquals(_handlers[i], handler))
+                    {
+                        _handlers.RemoveAt(i);
+                        break;
+                    }
                 }
-            }
+            });
         }
 
         public void Dispose()
@@ -226,20 +224,5 @@ namespace Strada.Core.Sync
             _handlers.Clear();
         }
 
-        private sealed class UntypedDependencySubscription : IDisposable
-        {
-            private readonly object _property;
-            private readonly MethodInfo _unsubscribeMethod;
-            private readonly Delegate _handler;
-
-            public UntypedDependencySubscription(object property, MethodInfo unsubscribeMethod, Delegate handler)
-            {
-                _property = property;
-                _unsubscribeMethod = unsubscribeMethod;
-                _handler = handler;
-            }
-
-            public void Dispose() => _unsubscribeMethod.Invoke(_property, new object[] { _handler });
-        }
     }
 }

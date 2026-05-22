@@ -46,8 +46,8 @@ namespace Strada.Core.Tests.Stress
                             if (j % 100 == 0)
                             {
                                 Action<TestEvent> tempHandler = e => { };
-                                _bus.Subscribe(tempHandler);
-                                _bus.Unsubscribe(tempHandler);
+                                var token = _bus.Subscribe(tempHandler);
+                                token.Dispose();
                             }
                         }
                     });

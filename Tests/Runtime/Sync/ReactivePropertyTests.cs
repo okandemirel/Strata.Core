@@ -1,10 +1,6 @@
 using NUnit.Framework;
 using Strada.Core.Sync;
 
-// Tests intentionally exercise the legacy Unsubscribe API on
-// IReadOnlyReactiveProperty<T> during the deprecation period.
-#pragma warning disable CS0618
-
 namespace Strada.Core.Tests.Tests.Runtime.Sync
 {
     [TestFixture]
@@ -61,22 +57,6 @@ namespace Strada.Core.Tests.Tests.Runtime.Sync
             property.SubscribeAndInvoke(v => receivedValue = v);
 
             Assert.AreEqual(25, receivedValue);
-        }
-
-        [Test]
-        public void Unsubscribe_StopsNotifications()
-        {
-            var property = new ReactiveProperty<int>(0);
-            int notifyCount = 0;
-            System.Action<int> handler = _ => notifyCount++;
-
-            property.Subscribe(handler);
-            property.Value = 1;
-            Assert.AreEqual(1, notifyCount);
-
-            property.Unsubscribe(handler);
-            property.Value = 2;
-            Assert.AreEqual(1, notifyCount);
         }
 
         [Test]

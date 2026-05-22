@@ -1,6 +1,6 @@
 {
   "name": "com.strada.core",
-  "version": "1.0.0-alpha.1",
+  "version": "2.0.0-alpha.1",
   "displayName": "Strada Framework Core",
   "description": "The world's first truly unified MVCS+ECS framework for Unity. Combines enterprise-grade dependency injection with performance-critical ECS simulation, wrapped in a ScriptableObject-driven modular architecture.",
   "unity": "6000.0",
