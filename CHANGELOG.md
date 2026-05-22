@@ -9,8 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-Security audit follow-ups for MEDIUM severity findings (see
-[`SecurityReports/2026-05-22-medium-status-review.md`](SecurityReports/2026-05-22-medium-status-review.md)).
+#### LOW severity quick-wins
+
+Sprint 3 — small-effort hardening for LOW findings identified in
+[`SecurityReports/2026-05-22-low-status-review.md`](SecurityReports/2026-05-22-low-status-review.md).
+
+- **Bootstrap:** `GameBootstrapperConfig._verboseLogging` now defaults to `false`
+  (was `true`). Reduces information disclosure in production builds.
+- **DI / Communication / Sync:** integer-overflow guards added to identifier
+  allocators that previously wrapped silently on `int.MaxValue`:
+  - `TimerService.Schedule` (`Runtime/Services/TimerService.cs`)
+  - `EntityHandleRegistry.Register` (`Runtime/Sync/EntityHandleRegistry.cs`)
+  - `EventBus` signal / query / event / async-signal / async-query type-id
+    counters (`Runtime/Communication/EventBus.cs`) via a shared
+    `AllocateAndCheck` helper.
+- **Patterns:** `View.UpdateView` rejects `null` model with
+  `ArgumentNullException`. `PatternManager.RegisterController` and
+  `RegisterService` now reject `null` and throw on duplicate registration.
+- **Sync:** `TwoWayBinding<T>` and `TwoWayBinding<TSource, TTarget>` now use
+  `try / finally` around the reentrancy guard so a thrown handler does not
+  leave `_updating = true`. `MediatorPool` caps the available stack at 256
+  to prevent unbounded growth during scene teardown.
+- **ECS:** `ECSBuilder.WithSystem` throws when the same system type is
+  registered twice, avoiding silently-duplicated update calls.
+- **Data:** `ConfigData<T>.Data` setter rejects `null` instead of allowing
+  callers to clear the underlying instance.
+
+#### MEDIUM severity (Sprint 1 + 2 — earlier in this release)
 
 - **DI:** `DirectFactory<T>.Delegate` public static field replaced with private
   field plus `Register(factory)` / `Clear()` / `internal Get()` API. External
@@ -83,6 +108,9 @@ Place this once anywhere in your assembly (commonly `AssemblyInfo.cs`).
   severity audit status across 64 unique findings.
 - New `SecurityReports/2026-05-22-medium-fix-plans.md` — concrete fix
   plans with code snippets, breaking-change analysis, and sprint ordering.
+- New `SecurityReports/2026-05-22-low-status-review.md` — LOW severity
+  audit status across 81 unique findings (44% already FIXED, 41 OPEN of
+  which 10 are quick-win candidates).
 
 ## Earlier history
 

@@ -165,8 +165,8 @@ namespace Strada.Core.Sync
         {
             if (_updating) return;
             _updating = true;
-            _target.Value = value;
-            _updating = false;
+            try { _target.Value = value; }
+            finally { _updating = false; }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -174,8 +174,8 @@ namespace Strada.Core.Sync
         {
             if (_updating) return;
             _updating = true;
-            _source.Value = value;
-            _updating = false;
+            try { _source.Value = value; }
+            finally { _updating = false; }
         }
 
         public void Dispose()
@@ -221,8 +221,8 @@ namespace Strada.Core.Sync
         {
             if (_updating) return;
             _updating = true;
-            _target.Value = _toTarget(value);
-            _updating = false;
+            try { _target.Value = _toTarget(value); }
+            finally { _updating = false; }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -230,8 +230,8 @@ namespace Strada.Core.Sync
         {
             if (_updating) return;
             _updating = true;
-            _source.Value = _toSource(value);
-            _updating = false;
+            try { _source.Value = _toSource(value); }
+            finally { _updating = false; }
         }
 
         public void Dispose()

@@ -358,29 +358,41 @@ namespace Strada.Core.Communication
             }
         }
 
+        // Static type-id allocators. Each unique closed generic T allocates one id per kind.
+        // Practically bounded by the number of distinct signal/query/event types in the program,
+        // but we still trip an explicit overflow rather than wrapping into negative ids.
+        private static int AllocateAndCheck(ref int counter, string kind)
+        {
+            var id = Interlocked.Increment(ref counter);
+            if (id < 0)
+                throw new InvalidOperationException(
+                    $"EventBus {kind} type-id counter overflowed int.MaxValue.");
+            return id;
+        }
+
         private static class SignalTypeId<T>
         {
-            public static readonly int Id = Interlocked.Increment(ref _nextSignalTypeId);
+            public static readonly int Id = AllocateAndCheck(ref _nextSignalTypeId, "signal");
         }
 
         private static class QueryTypeId<T>
         {
-            public static readonly int Id = Interlocked.Increment(ref _nextQueryTypeId);
+            public static readonly int Id = AllocateAndCheck(ref _nextQueryTypeId, "query");
         }
 
         private static class EventTypeId<T>
         {
-            public static readonly int Id = Interlocked.Increment(ref _nextEventTypeId);
+            public static readonly int Id = AllocateAndCheck(ref _nextEventTypeId, "event");
         }
 
         private static class AsyncSignalTypeId<T>
         {
-            public static readonly int Id = Interlocked.Increment(ref _nextAsyncSignalTypeId);
+            public static readonly int Id = AllocateAndCheck(ref _nextAsyncSignalTypeId, "async-signal");
         }
 
         private static class AsyncQueryTypeId<T>
         {
-            public static readonly int Id = Interlocked.Increment(ref _nextAsyncQueryTypeId);
+            public static readonly int Id = AllocateAndCheck(ref _nextAsyncQueryTypeId, "async-query");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

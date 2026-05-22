@@ -36,6 +36,11 @@ namespace Strada.Core.Patterns
         /// </summary>
         public void RegisterController(IController controller)
         {
+            if (controller == null) throw new ArgumentNullException(nameof(controller));
+            if (_controllers.Contains(controller))
+                throw new InvalidOperationException(
+                    $"Controller '{controller.GetType().Name}' is already registered.");
+
             _controllers.Add(controller);
 
             if (controller is IFixedTickController fixedController)
@@ -49,6 +54,11 @@ namespace Strada.Core.Patterns
         /// </summary>
         public void RegisterService(IService service)
         {
+            if (service == null) throw new ArgumentNullException(nameof(service));
+            if (_services.Contains(service))
+                throw new InvalidOperationException(
+                    $"Service '{service.GetType().Name}' is already registered.");
+
             _services.Add(service);
             RegisterTickables(service);
         }

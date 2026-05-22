@@ -36,6 +36,10 @@ namespace Strada.Core.Services
         public TimerHandle Schedule(float delay, float interval, int repeatCount, Action callback)
         {
             var entry = _entryPool.Spawn();
+            if (_nextId == int.MaxValue)
+                throw new InvalidOperationException(
+                    "TimerService ID space exhausted (int.MaxValue timers scheduled). " +
+                    "Restart the application or recycle the service.");
             entry.Id = _nextId++;
             entry.Delay = delay;
             entry.Interval = interval;

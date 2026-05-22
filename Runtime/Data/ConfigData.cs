@@ -43,7 +43,8 @@ namespace Strada.Core.Data
                     _data = new T();
                 return _data;
             }
-            set => _data = value;
+            set => _data = value ?? throw new ArgumentNullException(nameof(value),
+                "ConfigData<T>.Data cannot be set to null; use a default instance instead.");
         }
 
         public ref T GetDataRef() => ref _data;

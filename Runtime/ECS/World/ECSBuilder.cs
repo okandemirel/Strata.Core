@@ -25,14 +25,26 @@ namespace Strada.Core.ECS.World
 
         public ECSBuilder WithSystem<T>(UpdatePhase phase = UpdatePhase.Update) where T : ISystem, new()
         {
+            EnsureNotRegistered(typeof(T));
             _systemFactories.Add((typeof(T), phase, _ => new T()));
             return this;
         }
 
         public ECSBuilder WithSystem<T>(Func<World, T> factory, UpdatePhase phase = UpdatePhase.Update) where T : ISystem
         {
+            EnsureNotRegistered(typeof(T));
             _systemFactories.Add((typeof(T), phase, w => factory(w)));
             return this;
+        }
+
+        private void EnsureNotRegistered(Type systemType)
+        {
+            for (int i = 0; i < _systemFactories.Count; i++)
+            {
+                if (_systemFactories[i].systemType == systemType)
+                    throw new InvalidOperationException(
+                        $"System '{systemType.Name}' is already registered on this ECSBuilder.");
+            }
         }
 
         public World Build()

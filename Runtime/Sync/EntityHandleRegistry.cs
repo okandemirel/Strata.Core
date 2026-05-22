@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Strada.Core.ECS;
 
@@ -15,6 +16,9 @@ namespace Strada.Core.Sync
             if (_entityToHandle.TryGetValue(entityKey, out int existingHandleId))
                 return new EntityHandle(existingHandleId, entity.Version);
 
+            if (_nextHandleId == int.MaxValue)
+                throw new InvalidOperationException(
+                    "EntityHandleRegistry handle ID space exhausted (int.MaxValue handles allocated).");
             int handleId = _nextHandleId++;
             _handleToEntity[handleId] = entity;
             _entityToHandle[entityKey] = handleId;

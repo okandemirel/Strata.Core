@@ -21,7 +21,7 @@ namespace Strada.Core.Bootstrap
 
         [Header("Settings")]
         [Tooltip("Enable verbose logging during bootstrap")]
-        [SerializeField] private bool _verboseLogging = true;
+        [SerializeField] private bool _verboseLogging = false;
 
         [Tooltip("Validate module dependencies and configurations on start")]
         [SerializeField] private bool _validateOnStart = true;

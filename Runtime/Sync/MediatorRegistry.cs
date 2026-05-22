@@ -85,6 +85,10 @@ namespace Strada.Core.Sync
 
         internal sealed class MediatorPoolInstance
         {
+            // Cap pool size to prevent unbounded growth if mediators are released
+            // faster than they are rented (eg. during teardown of large scenes).
+            private const int MaxPoolSize = 256;
+
             private readonly Stack<TMediator> _available = new(16);
             private readonly object _lock = new();
 
@@ -102,6 +106,7 @@ namespace Strada.Core.Sync
             {
                 lock (_lock)
                 {
+                    if (_available.Count >= MaxPoolSize) return;  // pool full — drop the instance
                     _available.Push(mediator);
                 }
             }

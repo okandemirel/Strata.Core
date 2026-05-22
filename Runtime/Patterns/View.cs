@@ -81,6 +81,7 @@ namespace Strada.Core.Patterns
         /// <param name="model">The model instance to update from.</param>
         public virtual void UpdateView(TModel model)
         {
+            if (model == null) throw new ArgumentNullException(nameof(model));
             Model = model;
             OnViewUpdate();
         }
