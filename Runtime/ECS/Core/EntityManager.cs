@@ -7,6 +7,14 @@ using Strada.Core.ECS.Storage;
 
 namespace Strada.Core.ECS.Core
 {
+    /// <remarks>
+    /// FRAMEWORK DESIGN: EntityManager is intentionally not thread-safe. Strada's ECS
+    /// follows the Unity main-thread model — entity creation, destruction, and component
+    /// add/remove must happen on the main thread or be deferred through an
+    /// <see cref="Strada.Core.ECS.Jobs.EntityCommandBuffer"/> recorded inside a job and
+    /// played back on the main thread. Adding locks to the hot path would erase the
+    /// SparseSet's cache-friendly performance characteristics.
+    /// </remarks>
     public sealed class EntityManager : IDisposable
     {
         private const int InitialCapacity = 1024;

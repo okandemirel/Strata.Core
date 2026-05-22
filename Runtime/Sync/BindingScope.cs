@@ -16,6 +16,19 @@ namespace Strada.Core.Sync
             return disposable;
         }
 
+        /// <summary>
+        /// Adds a disposable (typically a <see cref="Strada.Core.SubscriptionToken"/>) to
+        /// the scope so it is disposed in LIFO order when the scope itself is disposed.
+        /// Returns the same instance so calls can be chained: <c>scope.Add(bus.Subscribe(...))</c>.
+        /// </summary>
+        public IDisposable Add(IDisposable disposable)
+        {
+            if (disposable == null) throw new ArgumentNullException(nameof(disposable));
+            if (_disposed) { disposable.Dispose(); return disposable; }
+            _disposables.Add(disposable);
+            return disposable;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Subscribe<T>(IReadOnlyReactiveProperty<T> property, Action<T> handler)
         {

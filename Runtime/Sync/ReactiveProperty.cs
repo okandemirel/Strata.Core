@@ -11,6 +11,13 @@ namespace Strada.Core.Sync
         void Unsubscribe(Action<T> handler);
     }
 
+    /// <remarks>
+    /// FRAMEWORK DESIGN: ReactiveProperty is intentionally not thread-safe. Strada
+    /// targets Unity's main-thread UI/game-state model; locks on every Value setter would
+    /// add overhead on a path that runs hundreds of times per frame. Cross-thread updates
+    /// must be marshalled to the main thread by the caller (eg. via
+    /// <see cref="UnityEngine.PlayerLoop"/> or a job-completion callback) before assigning.
+    /// </remarks>
     public sealed class ReactiveProperty<T> : IReadOnlyReactiveProperty<T>, IDisposable
     {
         private T _value;
@@ -46,17 +53,36 @@ namespace Strada.Core.Sync
             _value = value;
         }
 
+        /// <summary>
+        /// Subscribes <paramref name="handler"/> to value changes and returns a
+        /// <see cref="Strada.Core.SubscriptionToken"/> that, when disposed, removes
+        /// exactly this handler. Callers that ignore the return value retain the
+        /// previous behaviour and must call <see cref="Unsubscribe(Action{T})"/>
+        /// manually.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Subscribe(Action<T> handler)
+        public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
         {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
             _handlers.Add(handler);
+            return new Strada.Core.SubscriptionToken(() => Unsubscribe(handler));
         }
 
+        // Explicit interface implementation preserves the IReadOnlyReactiveProperty<T>.Subscribe
+        // void contract for callers that go through the interface.
+        void IReadOnlyReactiveProperty<T>.Subscribe(Action<T> handler) => Subscribe(handler);
+
+        /// <summary>
+        /// Subscribes <paramref name="handler"/>, invokes it once with the current value,
+        /// and returns a token whose <see cref="Strada.Core.SubscriptionToken.Dispose"/>
+        /// removes the handler.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void SubscribeAndInvoke(Action<T> handler)
+        public Strada.Core.SubscriptionToken SubscribeAndInvoke(Action<T> handler)
         {
-            _handlers.Add(handler);
+            var token = Subscribe(handler);
             handler(_value);
+            return token;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

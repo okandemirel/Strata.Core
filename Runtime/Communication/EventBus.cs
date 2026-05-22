@@ -230,9 +230,17 @@ namespace Strada.Core.Communication
             }
         }
 
-        public void Subscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
+        /// <summary>
+        /// Subscribes <paramref name="handler"/> to events of type <typeparamref name="TEvent"/>
+        /// and returns a <see cref="Strada.Core.SubscriptionToken"/> that, when disposed,
+        /// removes exactly this handler. Callers that ignore the return value retain the
+        /// previous behaviour and must call <see cref="Unsubscribe{TEvent}(Action{TEvent})"/>
+        /// to remove the handler later.
+        /// </summary>
+        public Strada.Core.SubscriptionToken Subscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
         {
             if (_disposed) ThrowDisposed();
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
 
             var id = EventTypeId<TEvent>.Id;
             EventChannel<TEvent> channel;
@@ -249,7 +257,12 @@ namespace Strada.Core.Communication
             }
 
             channel.Subscribe(handler);
+            return new Strada.Core.SubscriptionToken(() => Unsubscribe(handler));
         }
+
+        // Explicit interface implementation preserves the IEventPublisher.Subscribe void contract
+        // for callers that go through the interface. The class-level Subscribe returns a token.
+        void IEventPublisher.Subscribe<TEvent>(Action<TEvent> handler) => Subscribe(handler);
 
         public void Unsubscribe<TEvent>(Action<TEvent> handler) where TEvent : struct
         {

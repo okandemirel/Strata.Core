@@ -37,6 +37,11 @@ namespace Strada.Core.DI
             var properties = new List<PropertyInfo>(4);
             var fields = new List<FieldInfo>(4);
 
+            // FRAMEWORK DESIGN: BindingFlags.NonPublic is intentional. Strada's DI lets the
+            // [Inject] attribute target private/protected fields, properties, and methods so
+            // services can keep their dependencies out of their public API. Removing
+            // NonPublic would force every dependency to be public, which is at odds with
+            // standard DI conventions.
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
             foreach (var method in type.GetMethods(flags))

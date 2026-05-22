@@ -5,6 +5,12 @@ using Unity.Jobs;
 
 namespace Strada.Core.ECS.Jobs
 {
+    // FRAMEWORK DESIGN: The struct families below carry [NativeDisableUnsafePtrRestriction]
+    // on every pointer field. This is a Unity Burst requirement — parallel jobs must hold
+    // raw pointers to component storage so Burst can vectorise the inner loop. The
+    // attribute disables the Job Safety System's pointer-aliasing check, but Burst's own
+    // bounds and aliasing analysis still runs at compile time. Removing the attribute
+    // would prevent the jobs from compiling under Burst.
     [BurstCompile]
     public unsafe struct ComponentJobParallel<TJob, T1> : IJobParallelFor
         where TJob : struct, IJobComponent<T1>

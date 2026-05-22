@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+#### F8 + F9 token foundation (Phase 0)
+
+First step of the deferred subscription-token refactor (see
+[`SecurityReports/2026-05-22-major-api-plan-f8-f9.md`](SecurityReports/2026-05-22-major-api-plan-f8-f9.md)).
+This release lands the foundation only; internal callers will migrate in
+a follow-up sprint and the legacy void overloads stay available for one
+more minor version.
+
+- **New type:** `Strada.Core.SubscriptionToken` — disposable handle with
+  idempotent, thread-safe `Dispose` (uses `Interlocked.Exchange` on the
+  underlying delegate).
+- **`EventBus.Subscribe<TEvent>(Action<TEvent>)`** now returns a
+  `SubscriptionToken`. Calling code that ignored the previous `void`
+  return value continues to compile and behave identically. Callers
+  routed through the `IEventPublisher` interface still see the original
+  `void` contract via an explicit interface implementation, so external
+  implementers of `IEventPublisher` are not broken.
+- **`ReactiveProperty<T>.Subscribe(Action<T>)`** and
+  **`SubscribeAndInvoke(Action<T>)`** return a `SubscriptionToken` with
+  the same source-compatible semantics. The `IReadOnlyReactiveProperty<T>`
+  interface keeps its `void Subscribe` shape via an explicit interface
+  implementation.
+- **`BindingScope.Add(IDisposable)`** is a new public method that
+  appends a disposable (typically a `SubscriptionToken`) to the scope's
+  disposal list. If the scope is already disposed, the incoming token is
+  disposed immediately.
+
 #### Editor tooling & source-generator hardening (Sprint 4)
 
 LOW severity follow-ups for editor and codegen attack surface (see

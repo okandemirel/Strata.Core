@@ -190,6 +190,9 @@ namespace Strada.Core.DI
                     {
                         _disposalStack.Pop().Dispose();
                     }
+                    // FRAMEWORK DESIGN: broad catch is required here. Container disposal
+                    // must continue draining the stack even if one service's Dispose throws —
+                    // otherwise a single bad service leaks every disposable below it on the stack.
                     catch (Exception e)
                     {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
