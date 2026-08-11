@@ -53,12 +53,25 @@ namespace Strada.Core.ECS.Query
                 else if (c3 <= c4) { entities = set3.GetDenseEntityPtr(); minCount = c3; }
                 else { entities = set4.GetDenseEntityPtr(); minCount = c4; }
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                T3* data3 = set3.GetDataPtr();
+                T4* data4 = set4.GetDataPtr();
+                int g1 = set1.StructuralVersion;
+                int g2 = set2.StructuralVersion;
+                int g3 = set3.StructuralVersion;
+                int g4 = set4.StructuralVersion;
+
                 for (int i = 0; i < minCount; i++)
                 {
                     int e = entities[i];
                     int i1 = set1.GetDenseIndex(e), i2 = set2.GetDenseIndex(e), i3 = set3.GetDenseIndex(e), i4 = set4.GetDenseIndex(e);
                     if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0) continue;
-                    action(e, ref *(set1.GetDataPtr() + i1), ref *(set2.GetDataPtr() + i2), ref *(set3.GetDataPtr() + i3), ref *(set4.GetDataPtr() + i4));
+                    action(e, ref data1[i1], ref data2[i2], ref data3[i3], ref data4[i4]);
+                    QueryGuard.Check(g1, set1.StructuralVersion);
+                    QueryGuard.Check(g2, set2.StructuralVersion);
+                    QueryGuard.Check(g3, set3.StructuralVersion);
+                    QueryGuard.Check(g4, set4.StructuralVersion);
                 }
             }
         }
@@ -102,12 +115,28 @@ namespace Strada.Core.ECS.Query
 
                 int* entities = idx switch { 0 => set1.GetDenseEntityPtr(), 1 => set2.GetDenseEntityPtr(), 2 => set3.GetDenseEntityPtr(), 3 => set4.GetDenseEntityPtr(), _ => set5.GetDenseEntityPtr() };
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                T3* data3 = set3.GetDataPtr();
+                T4* data4 = set4.GetDataPtr();
+                T5* data5 = set5.GetDataPtr();
+                int g1 = set1.StructuralVersion;
+                int g2 = set2.StructuralVersion;
+                int g3 = set3.StructuralVersion;
+                int g4 = set4.StructuralVersion;
+                int g5 = set5.StructuralVersion;
+
                 for (int i = 0; i < min; i++)
                 {
                     int e = entities[i];
                     int i1 = set1.GetDenseIndex(e), i2 = set2.GetDenseIndex(e), i3 = set3.GetDenseIndex(e), i4 = set4.GetDenseIndex(e), i5 = set5.GetDenseIndex(e);
                     if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0) continue;
-                    action(e, ref *(set1.GetDataPtr() + i1), ref *(set2.GetDataPtr() + i2), ref *(set3.GetDataPtr() + i3), ref *(set4.GetDataPtr() + i4), ref *(set5.GetDataPtr() + i5));
+                    action(e, ref data1[i1], ref data2[i2], ref data3[i3], ref data4[i4], ref data5[i5]);
+                    QueryGuard.Check(g1, set1.StructuralVersion);
+                    QueryGuard.Check(g2, set2.StructuralVersion);
+                    QueryGuard.Check(g3, set3.StructuralVersion);
+                    QueryGuard.Check(g4, set4.StructuralVersion);
+                    QueryGuard.Check(g5, set5.StructuralVersion);
                 }
             }
         }
@@ -155,12 +184,31 @@ namespace Strada.Core.ECS.Query
 
                 int* entities = idx switch { 0 => set1.GetDenseEntityPtr(), 1 => set2.GetDenseEntityPtr(), 2 => set3.GetDenseEntityPtr(), 3 => set4.GetDenseEntityPtr(), 4 => set5.GetDenseEntityPtr(), _ => set6.GetDenseEntityPtr() };
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                T3* data3 = set3.GetDataPtr();
+                T4* data4 = set4.GetDataPtr();
+                T5* data5 = set5.GetDataPtr();
+                T6* data6 = set6.GetDataPtr();
+                int g1 = set1.StructuralVersion;
+                int g2 = set2.StructuralVersion;
+                int g3 = set3.StructuralVersion;
+                int g4 = set4.StructuralVersion;
+                int g5 = set5.StructuralVersion;
+                int g6 = set6.StructuralVersion;
+
                 for (int i = 0; i < min; i++)
                 {
                     int e = entities[i];
                     int i1 = set1.GetDenseIndex(e), i2 = set2.GetDenseIndex(e), i3 = set3.GetDenseIndex(e), i4 = set4.GetDenseIndex(e), i5 = set5.GetDenseIndex(e), i6 = set6.GetDenseIndex(e);
                     if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0 || i6 < 0) continue;
-                    action(e, ref *(set1.GetDataPtr() + i1), ref *(set2.GetDataPtr() + i2), ref *(set3.GetDataPtr() + i3), ref *(set4.GetDataPtr() + i4), ref *(set5.GetDataPtr() + i5), ref *(set6.GetDataPtr() + i6));
+                    action(e, ref data1[i1], ref data2[i2], ref data3[i3], ref data4[i4], ref data5[i5], ref data6[i6]);
+                    QueryGuard.Check(g1, set1.StructuralVersion);
+                    QueryGuard.Check(g2, set2.StructuralVersion);
+                    QueryGuard.Check(g3, set3.StructuralVersion);
+                    QueryGuard.Check(g4, set4.StructuralVersion);
+                    QueryGuard.Check(g5, set5.StructuralVersion);
+                    QueryGuard.Check(g6, set6.StructuralVersion);
                 }
             }
         }
@@ -212,12 +260,34 @@ namespace Strada.Core.ECS.Query
 
                 int* entities = idx switch { 0 => set1.GetDenseEntityPtr(), 1 => set2.GetDenseEntityPtr(), 2 => set3.GetDenseEntityPtr(), 3 => set4.GetDenseEntityPtr(), 4 => set5.GetDenseEntityPtr(), 5 => set6.GetDenseEntityPtr(), _ => set7.GetDenseEntityPtr() };
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                T3* data3 = set3.GetDataPtr();
+                T4* data4 = set4.GetDataPtr();
+                T5* data5 = set5.GetDataPtr();
+                T6* data6 = set6.GetDataPtr();
+                T7* data7 = set7.GetDataPtr();
+                int g1 = set1.StructuralVersion;
+                int g2 = set2.StructuralVersion;
+                int g3 = set3.StructuralVersion;
+                int g4 = set4.StructuralVersion;
+                int g5 = set5.StructuralVersion;
+                int g6 = set6.StructuralVersion;
+                int g7 = set7.StructuralVersion;
+
                 for (int i = 0; i < min; i++)
                 {
                     int e = entities[i];
                     int i1 = set1.GetDenseIndex(e), i2 = set2.GetDenseIndex(e), i3 = set3.GetDenseIndex(e), i4 = set4.GetDenseIndex(e), i5 = set5.GetDenseIndex(e), i6 = set6.GetDenseIndex(e), i7 = set7.GetDenseIndex(e);
                     if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0 || i6 < 0 || i7 < 0) continue;
-                    action(e, ref *(set1.GetDataPtr() + i1), ref *(set2.GetDataPtr() + i2), ref *(set3.GetDataPtr() + i3), ref *(set4.GetDataPtr() + i4), ref *(set5.GetDataPtr() + i5), ref *(set6.GetDataPtr() + i6), ref *(set7.GetDataPtr() + i7));
+                    action(e, ref data1[i1], ref data2[i2], ref data3[i3], ref data4[i4], ref data5[i5], ref data6[i6], ref data7[i7]);
+                    QueryGuard.Check(g1, set1.StructuralVersion);
+                    QueryGuard.Check(g2, set2.StructuralVersion);
+                    QueryGuard.Check(g3, set3.StructuralVersion);
+                    QueryGuard.Check(g4, set4.StructuralVersion);
+                    QueryGuard.Check(g5, set5.StructuralVersion);
+                    QueryGuard.Check(g6, set6.StructuralVersion);
+                    QueryGuard.Check(g7, set7.StructuralVersion);
                 }
             }
         }
@@ -272,14 +342,39 @@ namespace Strada.Core.ECS.Query
 
                 int* entities = idx switch { 0 => set1.GetDenseEntityPtr(), 1 => set2.GetDenseEntityPtr(), 2 => set3.GetDenseEntityPtr(), 3 => set4.GetDenseEntityPtr(), 4 => set5.GetDenseEntityPtr(), 5 => set6.GetDenseEntityPtr(), 6 => set7.GetDenseEntityPtr(), _ => set8.GetDenseEntityPtr() };
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                T3* data3 = set3.GetDataPtr();
+                T4* data4 = set4.GetDataPtr();
+                T5* data5 = set5.GetDataPtr();
+                T6* data6 = set6.GetDataPtr();
+                T7* data7 = set7.GetDataPtr();
+                T8* data8 = set8.GetDataPtr();
+                int g1 = set1.StructuralVersion;
+                int g2 = set2.StructuralVersion;
+                int g3 = set3.StructuralVersion;
+                int g4 = set4.StructuralVersion;
+                int g5 = set5.StructuralVersion;
+                int g6 = set6.StructuralVersion;
+                int g7 = set7.StructuralVersion;
+                int g8 = set8.StructuralVersion;
+
                 for (int i = 0; i < min; i++)
                 {
                     int e = entities[i];
                     int i1 = set1.GetDenseIndex(e), i2 = set2.GetDenseIndex(e), i3 = set3.GetDenseIndex(e), i4 = set4.GetDenseIndex(e);
                     int i5 = set5.GetDenseIndex(e), i6 = set6.GetDenseIndex(e), i7 = set7.GetDenseIndex(e), i8 = set8.GetDenseIndex(e);
                     if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0 || i6 < 0 || i7 < 0 || i8 < 0) continue;
-                    action(e, ref *(set1.GetDataPtr() + i1), ref *(set2.GetDataPtr() + i2), ref *(set3.GetDataPtr() + i3), ref *(set4.GetDataPtr() + i4),
-                           ref *(set5.GetDataPtr() + i5), ref *(set6.GetDataPtr() + i6), ref *(set7.GetDataPtr() + i7), ref *(set8.GetDataPtr() + i8));
+                    action(e, ref data1[i1], ref data2[i2], ref data3[i3], ref data4[i4],
+                           ref data5[i5], ref data6[i6], ref data7[i7], ref data8[i8]);
+                    QueryGuard.Check(g1, set1.StructuralVersion);
+                    QueryGuard.Check(g2, set2.StructuralVersion);
+                    QueryGuard.Check(g3, set3.StructuralVersion);
+                    QueryGuard.Check(g4, set4.StructuralVersion);
+                    QueryGuard.Check(g5, set5.StructuralVersion);
+                    QueryGuard.Check(g6, set6.StructuralVersion);
+                    QueryGuard.Check(g7, set7.StructuralVersion);
+                    QueryGuard.Check(g8, set8.StructuralVersion);
                 }
             }
         }

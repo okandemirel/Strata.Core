@@ -1,3 +1,4 @@
+using System;
 using NUnit.Framework;
 using Strada.Core.ECS;
 using Strada.Core.ECS.Core;
@@ -20,29 +21,31 @@ namespace Strada.Core.Tests.Tests.Runtime.ECS
         [TearDown]
         public void TearDown() => _manager?.Dispose();
 
+        /// <summary>
+        /// Destroying an entity from inside ForEach swap-removes it from the component
+        /// storage, reordering the very dense array the loop holds a raw pointer into. The
+        /// loop previously kept going over stale indices and counted them as processed —
+        /// reading memory that no longer belongs to the entity it thinks it is visiting.
+        /// In Editor and Development builds that is now a hard error instead of silent
+        /// corruption. Release player builds keep the old unchecked behaviour (the guard is
+        /// [Conditional]), which is why the ECB path below is the only supported pattern.
+        /// </summary>
         [Test]
-        public void ForEach_DestroyEntity_SkipsElements()
+        public void ForEach_DestroyEntity_ThrowsStructuralChangeGuard()
         {
             var e1 = _manager.CreateEntity(); _manager.AddComponent(e1, new TestComponent { Value = 1 });
             var e2 = _manager.CreateEntity(); _manager.AddComponent(e2, new TestComponent { Value = 2 });
             var e3 = _manager.CreateEntity(); _manager.AddComponent(e3, new TestComponent { Value = 3 });
 
-            int processedCount = 0;
-            
-            _manager.ForEach((int entityIndex, ref TestComponent c) =>
-            {
-                var entity = _manager.GetEntity(entityIndex);
-                if (c.Value == 1)
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                _manager.ForEach((int entityIndex, ref TestComponent c) =>
                 {
-                    _manager.DestroyEntity(entity);
-                }
-                processedCount++;
-            });
+                    if (c.Value == 1)
+                        _manager.DestroyEntity(_manager.GetEntity(entityIndex));
+                }));
 
-            Assert.AreEqual(3, processedCount, "Legacy ForEach iterates original count, processing moved entities at old indices (stale but counted).");
-            Assert.IsFalse(_manager.Exists(e1));
-            Assert.IsTrue(_manager.Exists(e2));
-            Assert.IsTrue(_manager.Exists(e3));
+            Assert.That(ex.Message, Does.Contain("EntityCommandBuffer"),
+                "The guard should point the caller at the supported alternative.");
         }
 
         [Test]

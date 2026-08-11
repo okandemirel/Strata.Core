@@ -73,6 +73,7 @@ namespace Strada.Core.ECS.Query
             {
                 int* entities = set.GetDenseEntityPtr();
                 T1* data = set.GetDataPtr();
+                int guard = set.StructuralVersion;
 
                 for (int i = 0; i < count; i++)
                 {
@@ -81,6 +82,7 @@ namespace Strada.Core.ECS.Query
                         continue;
 
                     action(entity, ref data[i]);
+                    QueryGuard.Check(guard, set.StructuralVersion);
                 }
             }
         }
@@ -133,6 +135,11 @@ namespace Strada.Core.ECS.Query
                 int* entities = useFirst ? set1.GetDenseEntityPtr() : set2.GetDenseEntityPtr();
                 int count = useFirst ? set1.Count : set2.Count;
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                int guard1 = set1.StructuralVersion;
+                int guard2 = set2.StructuralVersion;
+
                 for (int i = 0; i < count; i++)
                 {
                     int entity = entities[i];
@@ -145,9 +152,9 @@ namespace Strada.Core.ECS.Query
                     if (!QueryFilterHelper.PassesFilters(entity, _withFilters, _withoutFilters))
                         continue;
 
-                    T1* p1 = set1.GetDataPtr() + idx1;
-                    T2* p2 = set2.GetDataPtr() + idx2;
-                    action(entity, ref *p1, ref *p2);
+                    action(entity, ref data1[idx1], ref data2[idx2]);
+                    QueryGuard.Check(guard1, set1.StructuralVersion);
+                    QueryGuard.Check(guard2, set2.StructuralVersion);
                 }
             }
         }
@@ -223,6 +230,13 @@ namespace Strada.Core.ECS.Query
                     minCount = count3;
                 }
 
+                T1* data1 = set1.GetDataPtr();
+                T2* data2 = set2.GetDataPtr();
+                T3* data3 = set3.GetDataPtr();
+                int guard1 = set1.StructuralVersion;
+                int guard2 = set2.StructuralVersion;
+                int guard3 = set3.StructuralVersion;
+
                 for (int i = 0; i < minCount; i++)
                 {
                     int entity = entities[i];
@@ -236,10 +250,10 @@ namespace Strada.Core.ECS.Query
                     if (!QueryFilterHelper.PassesFilters(entity, _withFilters, _withoutFilters))
                         continue;
 
-                    T1* p1 = set1.GetDataPtr() + idx1;
-                    T2* p2 = set2.GetDataPtr() + idx2;
-                    T3* p3 = set3.GetDataPtr() + idx3;
-                    action(entity, ref *p1, ref *p2, ref *p3);
+                    action(entity, ref data1[idx1], ref data2[idx2], ref data3[idx3]);
+                    QueryGuard.Check(guard1, set1.StructuralVersion);
+                    QueryGuard.Check(guard2, set2.StructuralVersion);
+                    QueryGuard.Check(guard3, set3.StructuralVersion);
                 }
             }
         }

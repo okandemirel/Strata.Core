@@ -11,6 +11,13 @@ namespace Strada.Core.ECS.Storage
         private NativeArray<T> _data;
         private int _count;
         private Allocator _allocator;
+        // Bumped by every operation that can reallocate the native arrays or reorder the
+        // dense arrays. Queries hoist raw pointers into their loop, so a structural change
+        // from inside a ForEach callback leaves those pointers dangling; the guard turns
+        // that silent heap corruption into a thrown exception in Editor/Development builds.
+        private int _structuralVersion;
+
+        public int StructuralVersion => _structuralVersion;
 
         public int Count => _count;
         public int Capacity => _dense.Length;
@@ -24,6 +31,7 @@ namespace Strada.Core.ECS.Storage
             _dense = new NativeArray<int>(denseCapacity, allocator);
             _data = new NativeArray<T>(denseCapacity, allocator);
             _count = 0;
+            _structuralVersion = 0;
 
             UnsafeUtility.MemSet(_sparse.GetUnsafePtr(), 0xFF, sparseCapacity * sizeof(int));
         }
@@ -44,6 +52,7 @@ namespace Strada.Core.ECS.Storage
 
             EnsureDenseCapacity(_count + 1);
 
+            _structuralVersion++;
             _dense[_count] = entityIndex;
             _data[_count] = component;
             _sparse[entityIndex] = _count;
@@ -54,6 +63,8 @@ namespace Strada.Core.ECS.Storage
         {
             if ((uint)entityIndex >= (uint)_sparse.Length || _sparse[entityIndex] < 0)
                 return false;
+
+            _structuralVersion++;
 
             int denseIndex = _sparse[entityIndex];
             int lastIndex = _count - 1;
@@ -176,6 +187,7 @@ namespace Strada.Core.ECS.Storage
                 _sparse[_dense[i]] = -1;
             }
             _count = 0;
+            _structuralVersion++;
         }
 
         public void Dispose()
@@ -210,6 +222,7 @@ namespace Strada.Core.ECS.Storage
 
             _sparse.Dispose();
             _sparse = newSparse;
+            _structuralVersion++;
         }
 
         private void EnsureDenseCapacity(int required)
@@ -227,6 +240,7 @@ namespace Strada.Core.ECS.Storage
             NativeArray<T>.Copy(_data, newData, _count);
             _data.Dispose();
             _data = newData;
+            _structuralVersion++;
         }
 
         public Enumerator GetEnumerator() => new Enumerator(this);
