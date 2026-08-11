@@ -744,7 +744,10 @@ namespace Strada.Core.Editor.Windows
 
         private static string GenerateUniqueKey(UnityEngine.Object owner, FieldInfo field)
         {
-            int instanceId = owner.GetInstanceID();
+            // UnityEngine.Object overrides GetHashCode() to return its instance id, so this is
+            // identical to the old GetInstanceID() key without touching the obsoleted API
+            // (GetInstanceID is an error-level obsolete from Unity 6000.5 onwards).
+            int instanceId = owner.GetHashCode();
             return $"{instanceId}:{owner.GetType().FullName}:{field.Name}";
         }
 
