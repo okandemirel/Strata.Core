@@ -8,6 +8,8 @@ using Strada.Core.ECS;
 using UnityEditor;
 using UnityEngine;
 
+using Strada.Core.ECS.Systems;
+
 namespace Strada.Core.Editor.CodeGen
 {
     public static class SystemRegistryGenerator
@@ -202,14 +204,4 @@ namespace Strada.Core.Editor.CodeGen
         }
     }
 
-    [AttributeUsage(AttributeTargets.Class)]
-    public class SystemOrderAttribute : Attribute
-    {
-        public int Order { get; }
-
-        public SystemOrderAttribute(int order = 0)
-        {
-            Order = order;
-        }
-    }
 }

@@ -124,8 +124,41 @@ namespace Strada.Core.Editor.Windows
             window.minSize = new Vector2(900, 600);
         }
 
+        // Project-wide AssetDatabase scans are far too expensive to run from OnGUI, which
+        // repaints many times per second: DiscoverConfigs() loads EVERY ScriptableObject in
+        // the project, and the ModuleConfig scan loads every ModuleConfig. Both are cached
+        // here and refreshed on enable, on focus, and when assets actually change.
+        private List<StradaConfigDataManagerWindow.ConfigAsset> _cachedConfigAssets;
+        private ModuleConfig[] _cachedModuleConfigs;
+        private bool _assetCacheInvalid = true;
+
+        private void InvalidateAssetCache() => _assetCacheInvalid = true;
+
+        private void RefreshAssetCacheIfNeeded()
+        {
+            if (!_assetCacheInvalid && _cachedConfigAssets != null && _cachedModuleConfigs != null)
+                return;
+
+            _cachedConfigAssets = StradaConfigDataManagerWindow.DiscoverConfigs();
+
+            var guids = AssetDatabase.FindAssets("t:ModuleConfig");
+            var modules = new List<ModuleConfig>(guids.Length);
+            foreach (var guid in guids)
+            {
+                var asset = AssetDatabase.LoadAssetAtPath<ModuleConfig>(AssetDatabase.GUIDToAssetPath(guid));
+                if (asset != null) modules.Add(asset);
+            }
+            _cachedModuleConfigs = modules.ToArray();
+
+            _assetCacheInvalid = false;
+        }
+
+        private void OnFocus() => InvalidateAssetCache();
+        private void OnProjectChange() => InvalidateAssetCache();
+
         private void OnEnable()
         {
+            InvalidateAssetCache();
             _containerProvider = ContainerDataProvider.Instance;
             _worldProvider = WorldDataProvider.Instance;
             _moduleProvider = ModuleDataProvider.Instance;
@@ -504,7 +537,8 @@ namespace Strada.Core.Editor.Windows
             // Config Assets Discovery
             EditorGUILayout.BeginVertical(_statsBoxStyle);
             EditorGUILayout.LabelField("Config Assets (CD_*)", EditorStyles.boldLabel);
-            var configAssets = StradaConfigDataManagerWindow.DiscoverConfigs();
+            RefreshAssetCacheIfNeeded();
+            var configAssets = _cachedConfigAssets;
             if (configAssets.Count > 0)
             {
                 var grouped = configAssets.GroupBy(c => c.Category).OrderBy(g => g.Key);
@@ -529,13 +563,11 @@ namespace Strada.Core.Editor.Windows
             EditorGUILayout.BeginVertical(_statsBoxStyle);
             EditorGUILayout.LabelField("ModuleConfig Assets", EditorStyles.boldLabel);
 
-            var moduleGuids = AssetDatabase.FindAssets("t:ModuleConfig");
-            if (moduleGuids.Length > 0)
+            RefreshAssetCacheIfNeeded();
+            if (_cachedModuleConfigs.Length > 0)
             {
-                foreach (var guid in moduleGuids)
+                foreach (var moduleConfig in _cachedModuleConfigs)
                 {
-                    var assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                    var moduleConfig = AssetDatabase.LoadAssetAtPath<ModuleConfig>(assetPath);
                     if (moduleConfig != null)
                     {
                         EditorGUILayout.BeginHorizontal();
@@ -558,7 +590,7 @@ namespace Strada.Core.Editor.Windows
                         EditorGUILayout.EndHorizontal();
                     }
                 }
-                GUILayout.Label($"Total: {moduleGuids.Length} module configs found", EditorStyles.miniLabel);
+                GUILayout.Label($"Total: {_cachedModuleConfigs.Length} module configs found", EditorStyles.miniLabel);
             }
             else
             {

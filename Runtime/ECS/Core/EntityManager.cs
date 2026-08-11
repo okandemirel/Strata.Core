@@ -310,6 +310,17 @@ namespace Strada.Core.ECS.Core
             if (_recycledIndices.IsCreated) _recycledIndices.Dispose();
         }
 
+        /// <summary>
+        /// O(1) existence check by raw entity index, without the version component.
+        /// </summary>
+        /// <remarks>
+        /// Tooling that tracks bare indices needs this. The alternative was
+        /// GetAllEntities().Contains(index), which allocates a list of every live entity and
+        /// scans it linearly — quadratic when called once per tracked entity.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool ExistsIndex(int index) => IsActiveIndex(index);
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsActiveIndex(int index)
         {

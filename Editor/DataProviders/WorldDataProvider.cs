@@ -107,8 +107,10 @@ namespace Strada.Core.Editor.DataProviders
 
             try
             {
-                var entityIds = World.Current.EntityManager.GetAllEntities();
-                return entityIds.Contains(entityId);
+                // O(1). This previously materialised the full entity list and scanned it
+                // linearly on every call, so a caller looping over N entities paid O(N^2)
+                // time and N list allocations.
+                return World.Current.EntityManager.ExistsIndex(entityId);
             }
             catch
             {

@@ -42,8 +42,7 @@ namespace Strada.Core.Editor.Templates
                 {
                     "System",
                     "Strada.Core.ECS",
-                    "Strada.Core.ECS.Systems",
-                    "Strada.Core.Editor.CodeGen"
+                    "Strada.Core.ECS.Systems"
                 }
             },
             {
