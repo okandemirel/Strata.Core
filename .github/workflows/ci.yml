@@ -22,11 +22,17 @@
 
 name: ci
 
+# DEFERRED: manual-dispatch only for now. Re-enable automatic runs by restoring the
+# pull_request/push triggers below once UNITY_LICENSE / UNITY_EMAIL / UNITY_PASSWORD are
+# set and UNITY_VERSION is pinned to a version GameCI publishes an image for. Left on
+# workflow_dispatch rather than deleted so the pipeline can be tried on demand first —
+# with automatic triggers and no secrets, every push would simply go red.
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+  workflow_dispatch:
+  # pull_request:
+  #   branches: [main]
+  # push:
+  #   branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
