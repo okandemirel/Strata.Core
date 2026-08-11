@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using Strada.Core.DI;
 using Strada.Core.ECS;
 using Strada.Core.ECS.Core;
+using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 
 namespace Strada.Core.Sync
@@ -174,7 +175,9 @@ namespace Strada.Core.Sync
         private EntityManager _entityManager;
         private Entity _entity;
         private T _cachedValue;
-        private bool _dirty;
+        // Starts dirty so the first Sync establishes the baseline and publishes the initial
+        // value; afterwards it is set by MarkDirty and cleared by Sync.
+        private bool _dirty = true;
         private bool _disposed;
         private BindingSyncState _syncState = BindingSyncState.NotSynced;
         private string _lastError;
@@ -247,11 +250,20 @@ namespace Strada.Core.Sync
                 }
 
                 var current = _entityManager.GetComponent<T>(_entity);
+
+                // Only publish an actual change. This used to fire OnChanged on every sync
+                // regardless of the value, so in ForceAll mode every handler on every view
+                // ran every frame — a 100% false-positive rate that dragged UI and render
+                // work behind it.
+                bool changed = _dirty || !BitwiseEquals(current, _cachedValue);
+
                 _cachedValue = current;
                 _dirty = false;
                 _syncState = BindingSyncState.Synced;
                 _lastError = null;
-                OnChanged?.Invoke(current);
+
+                if (changed)
+                    OnChanged?.Invoke(current);
             }
             catch (Exception ex)
             {
@@ -260,10 +272,27 @@ namespace Strada.Core.Sync
             }
         }
 
+        /// <summary>
+        /// Forces the next <see cref="Sync"/> to publish, even if the component's bits are
+        /// unchanged. Required by <see cref="ViewSyncMode.DirtyOnly"/>, which only visits
+        /// bindings that have been marked.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void MarkDirty()
         {
             _dirty = true;
+        }
+
+        /// <summary>
+        /// Bitwise equality. T is constrained to unmanaged, so comparing the bits avoids the
+        /// boxing that EqualityComparer&lt;T&gt;.Default incurs for a struct that does not
+        /// implement IEquatable&lt;T&gt; — which is every IComponent in practice. Any bit
+        /// change counts as a change, which is the desired semantic for view synchronisation.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static unsafe bool BitwiseEquals(T a, T b)
+        {
+            return UnsafeUtility.MemCmp(&a, &b, UnsafeUtility.SizeOf<T>()) == 0;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

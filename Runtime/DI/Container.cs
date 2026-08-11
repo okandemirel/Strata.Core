@@ -111,6 +111,12 @@ namespace Strada.Core.DI
         /// <returns>true if the service was successfully resolved; otherwise, false.</returns>
         public bool TryResolve<T>(out T instance) where T : class
         {
+            if (_disposed)
+            {
+                instance = null;
+                return false;
+            }
+
             var typeId = TypeId<T>.Id;
             if (typeId <= _maxTypeId)
             {
@@ -281,6 +287,11 @@ namespace Strada.Core.DI
 
                 Func<IIndexResolver, object> rawFactory;
 
+                // True when the container itself constructs the instance, and therefore owns
+                // its disposal. For a RegisterInstance'd object the caller already handed us a
+                // live instance; it is pushed onto the disposal stack once, here.
+                bool containerOwnsInstance = reg.Instance == null;
+
                 if (reg.Instance != null)
                 {
                     if (reg.Instance is IDisposable d)
@@ -315,7 +326,9 @@ namespace Strada.Core.DI
                             return prev;
                         }
 
-                        if (instance is IDisposable disposable)
+                        // Skipped for RegisterInstance: that object is already on the stack
+                        // from build time, and pushing it again disposed it twice.
+                        if (containerOwnsInstance && instance is IDisposable disposable)
                         {
                             lock (_lock) _disposalStack.Push(disposable);
                         }
