@@ -1,0 +1,29 @@
+{
+    "name": "Strada.Core.Editor.Pipeline",
+    "rootNamespace": "Strada.Core.Editor.Pipeline",
+    "references": [
+        "Strada.Core",
+        "Strada.Core.Editor",
+        "Unity.Pipeline",
+        "Unity.Pipeline.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "STRADA_PIPELINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.pipeline",
+            "expression": "",
+            "define": "STRADA_PIPELINE"
+        }
+    ],
+    "noEngineReferences": false
+}
