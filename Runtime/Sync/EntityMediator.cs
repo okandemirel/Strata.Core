@@ -65,6 +65,13 @@ namespace Strada.Core.Sync
                 _bindSubscriptions[i].Dispose();
             _bindSubscriptions.Clear();
 
+            // Drained here, not only in Dispose: a pooled mediator is Unbound and rented
+            // again, and Initialize re-runs OnInitialize each time. Without this every
+            // rent/release cycle left one more subscription registered forever.
+            for (int i = _disposables.Count - 1; i >= 0; i--)
+                _disposables[i].Dispose();
+            _disposables.Clear();
+
             _entity = default;
             _view = null;
             _bound = false;

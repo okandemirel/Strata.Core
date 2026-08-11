@@ -77,7 +77,16 @@ namespace Strada.Core.Pooling
                 if (!_inPool.Add(instance))
                     return;
                 _available.Push(instance);
+                return;
             }
+
+            // Pool is full, so this instance is discarded rather than retained. It has to be
+            // accounted for: previously it was dropped on the floor without disposal, and
+            // _totalCreated kept counting it, so ActiveCount (_totalCreated - available) grew
+            // without bound for the lifetime of the pool.
+            _totalCreated--;
+            if (instance is IDisposable disposable)
+                disposable.Dispose();
         }
 
         public void Prewarm(int count)

@@ -22,7 +22,7 @@ namespace Strada.Core.ECS.Jobs
 
             unsafe
             {
-                return new ComponentJobParallel<TJob, T1>
+                var handle = new ComponentJobParallel<TJob, T1>
                 {
                     UserJob = job,
                     EntityIds = set.GetDenseEntityPtr(),
@@ -30,6 +30,9 @@ namespace Strada.Core.ECS.Jobs
                     SparseIndex1 = set.GetSparsePtr(),
                     MaxSparse1 = set.SparseCapacity
                 }.Schedule(set.Count, batchSize, dependency);
+                // Structural changes to these storages must now wait for this job.
+                storage.AddDependency(handle);
+                return handle;
             }
         }
 
@@ -52,7 +55,7 @@ namespace Strada.Core.ECS.Jobs
 
             unsafe
             {
-                return new ComponentJobParallel<TJob, T1, T2>
+                var handle = new ComponentJobParallel<TJob, T1, T2>
                 {
                     UserJob = job,
                     EntityIds = iterateFirst ? set1.GetDenseEntityPtr() : set2.GetDenseEntityPtr(),
@@ -63,6 +66,10 @@ namespace Strada.Core.ECS.Jobs
                     MaxSparse1 = set1.SparseCapacity,
                     MaxSparse2 = set2.SparseCapacity
                 }.Schedule(iterateFirst ? set1.Count : set2.Count, batchSize, dependency);
+                // Structural changes to these storages must now wait for this job.
+                storage1.AddDependency(handle);
+                storage2.AddDependency(handle);
+                return handle;
             }
         }
 
@@ -91,7 +98,7 @@ namespace Strada.Core.ECS.Jobs
                 if (set2.Count < minCount) { minCount = set2.Count; entityIds = set2.GetDenseEntityPtr(); }
                 if (set3.Count < minCount) { minCount = set3.Count; entityIds = set3.GetDenseEntityPtr(); }
 
-                return new ComponentJobParallel<TJob, T1, T2, T3>
+                var handle = new ComponentJobParallel<TJob, T1, T2, T3>
                 {
                     UserJob = job,
                     EntityIds = entityIds,
@@ -105,6 +112,11 @@ namespace Strada.Core.ECS.Jobs
                     MaxSparse2 = set2.SparseCapacity,
                     MaxSparse3 = set3.SparseCapacity
                 }.Schedule(minCount, batchSize, dependency);
+                // Structural changes to these storages must now wait for this job.
+                storage1.AddDependency(handle);
+                storage2.AddDependency(handle);
+                storage3.AddDependency(handle);
+                return handle;
             }
         }
 
@@ -137,7 +149,7 @@ namespace Strada.Core.ECS.Jobs
                 if (set3.Count < minCount) { minCount = set3.Count; entityIds = set3.GetDenseEntityPtr(); }
                 if (set4.Count < minCount) { minCount = set4.Count; entityIds = set4.GetDenseEntityPtr(); }
 
-                return new ComponentJobParallel<TJob, T1, T2, T3, T4>
+                var handle = new ComponentJobParallel<TJob, T1, T2, T3, T4>
                 {
                     UserJob = job,
                     EntityIds = entityIds,
@@ -154,6 +166,12 @@ namespace Strada.Core.ECS.Jobs
                     MaxSparse3 = set3.SparseCapacity,
                     MaxSparse4 = set4.SparseCapacity
                 }.Schedule(minCount, batchSize, dependency);
+                // Structural changes to these storages must now wait for this job.
+                storage1.AddDependency(handle);
+                storage2.AddDependency(handle);
+                storage3.AddDependency(handle);
+                storage4.AddDependency(handle);
+                return handle;
             }
         }
 

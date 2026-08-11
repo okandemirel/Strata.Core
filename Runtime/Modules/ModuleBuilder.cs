@@ -83,11 +83,11 @@ namespace Strada.Core.Modules
         public IModuleBuilder RegisterFactory<T>(Func<IServiceLocator, T> factory, Lifetime lifetime = Lifetime.Singleton)
             where T : class
         {
+            // The locator only wraps the container, which never changes, so build it once per
+            // registration instead of allocating a new one on every single resolve.
+            IServiceLocator cached = null;
             _containerBuilder.RegisterFactory<T>(container =>
-            {
-                var serviceLocator = new ServiceLocator(container);
-                return factory(serviceLocator);
-            }, lifetime);
+                factory(cached ??= new ServiceLocator(container)), lifetime);
             return this;
         }
 

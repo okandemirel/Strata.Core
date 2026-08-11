@@ -186,8 +186,8 @@ namespace Strada.Core.ECS.Core
             if (!Exists(entity))
                 return;
 
-            var storage = _store.GetOrCreateStorage<T>();
-            storage.Remove(entity.Index);
+            var storage = _store.TryGetStorage<T>();
+            storage?.Remove(entity.Index);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -196,8 +196,8 @@ namespace Strada.Core.ECS.Core
             if (!Exists(entity))
                 return false;
 
-            var storage = _store.GetOrCreateStorage<T>();
-            return storage.Contains(entity.Index);
+            var storage = _store.TryGetStorage<T>();
+            return storage != null && storage.Contains(entity.Index);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -206,7 +206,9 @@ namespace Strada.Core.ECS.Core
             if (!Exists(entity))
                 ThrowEntityNotExists(entity);
 
-            var storage = _store.GetOrCreateStorage<T>();
+            var storage = _store.TryGetStorage<T>()
+                          ?? throw new InvalidOperationException(
+                              $"Entity {entity.Index} does not have component {typeof(T).Name}");
             return storage.Get(entity.Index);
         }
 
@@ -221,8 +223,8 @@ namespace Strada.Core.ECS.Core
             if (!Exists(entity))
                 ThrowEntityNotExists(entity);
 
-            var storage = _store.GetOrCreateStorage<T>();
-            if (!storage.Contains(entity.Index))
+            var storage = _store.TryGetStorage<T>();
+            if (storage == null || !storage.Contains(entity.Index))
                 ThrowComponentNotFound<T>(entity);
 
             return ref storage.GetRef(entity.Index);
@@ -242,7 +244,9 @@ namespace Strada.Core.ECS.Core
             if (!Exists(entity))
                 return;
 
-            var storage = _store.GetOrCreateStorage<T>();
+            var storage = _store.TryGetStorage<T>()
+                          ?? throw new InvalidOperationException(
+                              $"Entity {entity.Index} does not have component {typeof(T).Name}");
             storage.Set(entity.Index, component);
         }
 
