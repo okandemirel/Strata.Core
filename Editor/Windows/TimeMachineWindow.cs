@@ -54,6 +54,12 @@ namespace Strada.Core.Editor.Windows
         private float _captureInterval = DefaultCaptureInterval;
         private double _lastCaptureTime;
 
+        // A snapshot count alone does not bound memory: each snapshot retains one dictionary
+        // per entity plus one boxed value per component, so 600 snapshots of a large world is
+        // gigabytes. Evict on the boxed-component total as well as on the count.
+        private const int MaxRetainedBoxedComponents = 1_000_000;
+        private long _retainedBoxedComponents;
+
         // Scratch buffers for the timeline bar. These are sized to the snapshot count and
         // reused; allocating them inside OnGUI meant a fresh int[] and Vector3[] per repaint.
         private int[] _entityCountBuffer = Array.Empty<int>();
@@ -103,6 +109,7 @@ namespace Strada.Core.Editor.Windows
         {
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             _snapshots.Clear();
+            _retainedBoxedComponents = 0;
             _liveSnapshot = null;
             _annotations.Clear();
         }
@@ -115,6 +122,7 @@ namespace Strada.Core.Editor.Windows
                 _isReplaying = false;
                 _isPlayingRecording = false;
                 _snapshots.Clear();
+                _retainedBoxedComponents = 0;
                 _liveSnapshot = null;
                 _playbackFrame = -1;
                 _annotations.Clear();
@@ -203,6 +211,7 @@ namespace Strada.Core.Editor.Windows
             if (GUILayout.Button("Clear", EditorStyles.toolbarButton))
             {
                 _snapshots.Clear();
+                _retainedBoxedComponents = 0;
                 _playbackFrame = -1;
                 _isReplaying = false;
                 _isPlayingRecording = false;
@@ -888,23 +897,40 @@ namespace Strada.Core.Editor.Windows
             }
 
             _snapshots.Add(snapshot);
-            if (_snapshots.Count > _maxSnapshots)
-            {
-                // Shift annotation keys down by 1 when removing oldest snapshot
-                var shifted = new Dictionary<int, string>();
-                foreach (var kvp in _annotations)
-                {
-                    int newKey = kvp.Key - 1;
-                    if (newKey >= 0)
-                    {
-                        shifted[newKey] = kvp.Value;
-                    }
-                }
-                _annotations = shifted;
+            _retainedBoxedComponents += snapshot.BoxedComponentCount;
 
-                _snapshots.RemoveAt(0);
-                if (_playbackFrame > 0) _playbackFrame--;
+            // Always keep the newest snapshot, however large it is - dropping it would leave
+            // the timeline with nothing to show.
+            while (_snapshots.Count > _maxSnapshots ||
+                   (_snapshots.Count > 1 && _retainedBoxedComponents > MaxRetainedBoxedComponents))
+            {
+                EvictOldestSnapshot();
             }
+        }
+
+        private void EvictOldestSnapshot()
+        {
+            // Shift annotation keys down by 1 when removing oldest snapshot
+            var shifted = new Dictionary<int, string>();
+            foreach (var kvp in _annotations)
+            {
+                int newKey = kvp.Key - 1;
+                if (newKey >= 0)
+                {
+                    shifted[newKey] = kvp.Value;
+                }
+            }
+            _annotations = shifted;
+
+            _retainedBoxedComponents -= _snapshots[0].BoxedComponentCount;
+            if (_retainedBoxedComponents < 0) _retainedBoxedComponents = 0;
+
+            _snapshots.RemoveAt(0);
+            if (_playbackFrame > 0) _playbackFrame--;
+
+            // The diff cache is keyed by frame index, and every index just shifted down by
+            // one, so keeping it would show the previous frame's diff.
+            InvalidateDiffCache();
         }
 
         private void RestoreSnapshot(WorldSnapshot snapshot)
@@ -935,6 +961,12 @@ namespace Strada.Core.Editor.Windows
         /// </summary>
         public bool HasEntityDestructions;
 
+        /// <summary>
+        /// Number of boxed component values this snapshot holds. Used by the window to bound
+        /// total retained memory, which the snapshot count on its own does not.
+        /// </summary>
+        public int BoxedComponentCount;
+
         private Dictionary<int, Dictionary<Type, object>> _entityData = new Dictionary<int, Dictionary<Type, object>>();
 
         /// <summary>
@@ -950,6 +982,8 @@ namespace Strada.Core.Editor.Windows
 
             entityManager.CaptureState(out NextEntityIndex, out ActiveIndices, out Versions);
 
+            BoxedComponentCount = 0;
+
             foreach (var entityId in ActiveIndices)
             {
                 var components = new Dictionary<Type, object>();
@@ -961,6 +995,7 @@ namespace Strada.Core.Editor.Windows
                         if (value != null)
                         {
                             components[type] = value;
+                            BoxedComponentCount++;
                         }
                     }
                 }

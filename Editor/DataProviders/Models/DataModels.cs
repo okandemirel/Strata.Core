@@ -188,11 +188,25 @@ namespace Strada.Core.Editor.DataProviders.Models
             var recursionStack = new HashSet<Type>();
             var path = new List<Type>();
 
+            // Adjacency built once. The DFS used to rescan the whole edge list at every node
+            // (Edges.Where(e => e.Source == current)), making detection O(V*E) — and it also
+            // allocated an enumerator per node.
+            var adjacency = new Dictionary<Type, List<DependencyEdge>>(Nodes.Count);
+            foreach (var edge in Edges)
+            {
+                if (!adjacency.TryGetValue(edge.Source, out var list))
+                {
+                    list = new List<DependencyEdge>();
+                    adjacency[edge.Source] = list;
+                }
+                list.Add(edge);
+            }
+
             foreach (var node in Nodes)
             {
                 if (!visited.Contains(node.ServiceType))
                 {
-                    if (DetectCyclesDFS(node.ServiceType, visited, recursionStack, path))
+                    if (DetectCyclesDFS(node.ServiceType, visited, recursionStack, path, adjacency))
                     {
                         HasCycle = true;
                         CyclePath = new List<Type>(path);
@@ -211,18 +225,22 @@ namespace Strada.Core.Editor.DataProviders.Models
         }
 
         private bool DetectCyclesDFS(Type current,
-            HashSet<Type> visited, HashSet<Type> recursionStack, List<Type> path)
+            HashSet<Type> visited, HashSet<Type> recursionStack, List<Type> path,
+            Dictionary<Type, List<DependencyEdge>> adjacency)
         {
             visited.Add(current);
             recursionStack.Add(current);
             path.Add(current);
 
-            var outgoingEdges = Edges.Where(e => e.Source == current);
-            foreach (var edge in outgoingEdges)
+            if (!adjacency.TryGetValue(current, out var outgoingEdges))
+                outgoingEdges = EmptyEdges;
+
+            for (int i = 0; i < outgoingEdges.Count; i++)
             {
+                var edge = outgoingEdges[i];
                 if (!visited.Contains(edge.Target))
                 {
-                    if (DetectCyclesDFS(edge.Target, visited, recursionStack, path))
+                    if (DetectCyclesDFS(edge.Target, visited, recursionStack, path, adjacency))
                         return true;
                 }
                 else if (recursionStack.Contains(edge.Target))
@@ -236,6 +254,8 @@ namespace Strada.Core.Editor.DataProviders.Models
             recursionStack.Remove(current);
             return false;
         }
+
+        private static readonly List<DependencyEdge> EmptyEdges = new List<DependencyEdge>();
     }
 
     /// <summary>
