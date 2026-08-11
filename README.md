@@ -531,6 +531,27 @@ This repository is a Unity *package*: it has no `Assets/` or `ProjectSettings/`,
 binary can open it directly. The scripts below synthesise the host project the Test Runner
 needs (including the mandatory `testables` entry, without which zero tests are discovered).
 
+Check what your machine can do first:
+
+```bash
+./Tools/ci/doctor.sh
+```
+
+The toolchain is resolved by `Tools/ci/unity-env.sh`. It uses Unity's own CLI (`unity`,
+shipped July 2026) when it is installed — for locating the editor and, in CI, for
+provisioning it with `unity install` — and otherwise falls back to a Hub installation or an
+explicit `UNITY` path. Nothing here *requires* the CLI.
+
+```bash
+brew install --cask unity-cli     # optional; see docs.unity.com/en-us/unity-cli
+unity install 6000.5.7f1          # the version this package targets
+```
+
+The compile and test invocations still drive the editor executable in batchmode rather than
+`unity test`. The CLI has a test subcommand, but it is marked experimental and its flags are
+not in the published reference — Unity's own docs name `unity --help` as the authority. The
+switch is a small, isolated change in `run-tests.sh`, noted inline there.
+
 ```bash
 # Build the host project once, then compile and run the suite
 ./Tools/ci/assemble-bench-project.sh "$PWD" /tmp/StradaBench
@@ -544,8 +565,8 @@ needs (including the mandatory `testables` entry, without which zero tests are d
 The tests live in an assembly that targets all platforms, so they run under
 `-testPlatform playmode`; `editmode` discovers none of them.
 
-Set `UNITY` to point at a different editor version, e.g.
-`UNITY=/Applications/Unity/Hub/Editor/6000.0.58f1/Unity.app/Contents/MacOS/Unity`.
+Set `UNITY` to pin an exact editor executable, or `STRADA_UNITY_VERSION` to pick a different
+installed version, e.g. `STRADA_UNITY_VERSION=6000.0.58f1 ./Tools/ci/compile.sh /tmp/StradaBench`.
 
 **Test Coverage:** 564 tests, all passing.
 

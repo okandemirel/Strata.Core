@@ -2,13 +2,20 @@
 # Runs the package test suite through the synthesised host project.
 #   usage: run-tests.sh <project> [editmode|playmode] [extra unity args...]
 set -uo pipefail
-UNITY=${UNITY:-/Applications/Unity/Hub/Editor/6000.5.7f1/Unity.app/Contents/MacOS/Unity}
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/unity-env.sh"
+strada_require_editor
 PROJ=${1:?project path required}
 MODE=${2:-editmode}
 OUT="$PROJ/../test-$MODE.xml"
 LOG="$PROJ/../test-$MODE.log"
 shift 2 || true
-"$UNITY" -batchmode -nographics -silent-crashes -accept-apiupdate \
+# Deliberately the editor executable rather than `unity test`. The CLI has a test
+# subcommand, but its flags are not in the published reference (the docs name
+# `unity --help` as the authority) and it is still marked experimental — whereas this
+# invocation is the one this repository has actually run. To switch: confirm the flags
+# with `unity test --help`, then replace this block with the equivalent CLI call and
+# keep -testResults so the parser below still works.
+"$UNITY_EDITOR" -batchmode -nographics -silent-crashes -accept-apiupdate \
   -projectPath "$PROJ" -runTests -testPlatform "$MODE" \
   -testResults "$OUT" -logFile "$LOG" "$@" >/dev/null 2>&1
 echo "unity exit: $?"

@@ -1,11 +1,16 @@
 # Strada.Core CI
 #
 # SETUP REQUIRED before this can run — it has not been executed yet:
-#   1. Add repository secrets UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD
-#      (see https://game.ci/docs/github/activation).
-#   2. Pin UNITY_VERSION below to a version GameCI publishes an image for. The repo is
-#      developed against 6000.5.7f1, but GameCI images lag; 6000.0.x is the safe choice
-#      for hosted runners.
+#   1. Add repository secrets UNITY_SERVICE_ACCOUNT_ID and UNITY_SERVICE_ACCOUNT_SECRET.
+#      These are Unity service-account credentials, which is the documented way to
+#      authenticate an unattended runner; the interactive `unity auth login` cannot be
+#      used from CI.
+#
+# This uses Unity's own CLI (shipped July 2026) rather than GameCI. That removes the
+# license-file activation dance and the dependency on GameCI publishing a Docker image
+# for the editor version we target — `unity install` provisions the exact version we ask
+# for. The CLI is marked EXPERIMENTAL by Unity, which is one more reason the triggers
+# below stay commented until someone has watched a run end to end.
 #
 # Design notes:
 #   - The repository is a Unity *package*: no Assets/, no ProjectSettings/. Nothing can
@@ -23,8 +28,9 @@
 name: ci
 
 # DEFERRED: manual-dispatch only for now. Re-enable automatic runs by restoring the
-# pull_request/push triggers below once UNITY_LICENSE / UNITY_EMAIL / UNITY_PASSWORD are
-# set and UNITY_VERSION is pinned to a version GameCI publishes an image for. Left on
+# pull_request/push triggers below once UNITY_SERVICE_ACCOUNT_ID and
+# UNITY_SERVICE_ACCOUNT_SECRET are set and one dispatch run has been watched end to
+# end (the Unity CLI is experimental). Left on
 # workflow_dispatch rather than deleted so the pipeline can be tried on demand first —
 # with automatic triggers and no secrets, every push would simply go red.
 on:
@@ -39,7 +45,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UNITY_VERSION: 6000.0.58f1
+  # The version the repository is developed against. With the CLI provisioning the editor
+  # there is no image-availability constraint, so this can track the real target.
+  STRADA_UNITY_VERSION: 6000.5.7f1
+  UNITY_NON_INTERACTIVE: 1
+  UNITY_NO_BANNER: 1
 
 jobs:
   generators:
@@ -78,30 +88,35 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: BenchProject/Library
-          key: Library-${{ env.UNITY_VERSION }}-${{ hashFiles('BenchProject/Packages/manifest.json') }}
-          restore-keys: Library-${{ env.UNITY_VERSION }}-
+          key: Library-${{ env.STRADA_UNITY_VERSION }}-${{ hashFiles('BenchProject/Packages/manifest.json') }}
+          restore-keys: Library-${{ env.STRADA_UNITY_VERSION }}-
+
+      - name: Install the Unity CLI
+        run: curl -fsSL https://public-cdn.cloud.unity3d.com/hub/prod/cli/install.sh | bash
+
+      - name: Provision the editor
+        env:
+          UNITY_SERVICE_ACCOUNT_ID: ${{ secrets.UNITY_SERVICE_ACCOUNT_ID }}
+          UNITY_SERVICE_ACCOUNT_SECRET: ${{ secrets.UNITY_SERVICE_ACCOUNT_SECRET }}
+        run: unity install "$STRADA_UNITY_VERSION" --non-interactive
+
+      - name: Toolchain report
+        run: ./Tools/ci/doctor.sh
 
       # Correctness gate. Compilation failures surface here too: Unity exits non-zero
       # when any assembly fails to build, which is how the CS0619 errors that made this
       # package uncompilable on Unity 6000.5 went unnoticed for so long.
       - name: Run tests
-        uses: game-ci/unity-test-runner@v4
         env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-        with:
-          projectPath: BenchProject
-          unityVersion: ${{ env.UNITY_VERSION }}
-          testMode: playmode
-          artifactsPath: artifacts
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          UNITY_SERVICE_ACCOUNT_ID: ${{ secrets.UNITY_SERVICE_ACCOUNT_ID }}
+          UNITY_SERVICE_ACCOUNT_SECRET: ${{ secrets.UNITY_SERVICE_ACCOUNT_SECRET }}
+        run: ./Tools/ci/run-tests.sh "$PWD/BenchProject" playmode
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: artifacts
+          path: BenchProject/../test-playmode.xml
 
   docs:
     name: documentation references real APIs
