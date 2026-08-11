@@ -128,17 +128,23 @@ namespace Strada.Core.Sync
 
         public void SyncAll()
         {
-            foreach (var view in _allViews)
+            // Iterate the snapshot, not the live set: a sync handler is allowed to spawn or
+            // despawn views, which mutates _allViews and throws mid-enumeration. The snapshot
+            // is only rebuilt when membership actually changes (see _cacheInvalid), so this
+            // costs nothing per frame.
+            var views = AllViews;
+            for (int i = 0; i < views.Count; i++)
             {
-                view.SyncBindings();
+                views[i].SyncBindings();
             }
         }
 
         public void ForceSyncAll()
         {
-            foreach (var view in _allViews)
+            var views = AllViews;
+            for (int i = 0; i < views.Count; i++)
             {
-                view.ForceSyncBindings();
+                views[i].ForceSyncBindings();
             }
         }
 

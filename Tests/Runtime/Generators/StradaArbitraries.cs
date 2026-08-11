@@ -55,7 +55,12 @@ namespace Strada.Core.Tests.Tests.Runtime.Generators
         {
             StradaArbitraries.RegisterAll();
 
-            return new Configuration { MaxNbOfTest = maxTest };
+            // QuickThrowOnFailure's runner throws on a falsified property, which is what makes
+            // the NUnit test fail. The default Configuration runner only prints, so every
+            // property test using it passed unconditionally no matter what it found.
+            var config = Configuration.QuickThrowOnFailure;
+            config.MaxNbOfTest = maxTest;
+            return config;
         }
     }
 }

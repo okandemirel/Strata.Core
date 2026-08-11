@@ -78,7 +78,20 @@ namespace Strada.Core.Services
                 if (timer.RemainingTime > 0)
                     continue;
 
-                timer.Callback?.Invoke();
+                // A throwing callback must not escape Update. It previously propagated out
+                // before the bookkeeping below ran, so the timer was never retired and fired
+                // again the next frame — wedging the frame loop permanently.
+                try
+                {
+                    timer.Callback?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogException(ex);
+                    // Retire the poison timer rather than replaying it every frame.
+                    RemoveAt(i);
+                    continue;
+                }
 
                 if (timer.RemainingRepeats > 0)
                     timer.RemainingRepeats--;

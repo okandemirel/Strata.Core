@@ -30,6 +30,10 @@ namespace Strada.Core.ECS.Storage
 
         public void Add(int entityIndex, T component)
         {
+            if (entityIndex < 0)
+                throw new ArgumentOutOfRangeException(nameof(entityIndex),
+                    $"Entity index must be non-negative (got {entityIndex}).");
+
             EnsureSparseCapacity(entityIndex + 1);
 
             if (_sparse[entityIndex] >= 0)
@@ -48,7 +52,7 @@ namespace Strada.Core.ECS.Storage
 
         public bool Remove(int entityIndex)
         {
-            if (entityIndex >= _sparse.Length || _sparse[entityIndex] < 0)
+            if ((uint)entityIndex >= (uint)_sparse.Length || _sparse[entityIndex] < 0)
                 return false;
 
             int denseIndex = _sparse[entityIndex];
@@ -69,12 +73,12 @@ namespace Strada.Core.ECS.Storage
 
         public bool Contains(int entityIndex)
         {
-            return entityIndex < _sparse.Length && _sparse[entityIndex] >= 0;
+            return (uint)entityIndex < (uint)_sparse.Length && _sparse[entityIndex] >= 0;
         }
 
         public T Get(int entityIndex)
         {
-            if (entityIndex >= _sparse.Length || _sparse[entityIndex] < 0)
+            if ((uint)entityIndex >= (uint)_sparse.Length || _sparse[entityIndex] < 0)
                 throw new InvalidOperationException($"Entity {entityIndex} does not exist in sparse set");
             return _data[_sparse[entityIndex]];
         }
@@ -93,7 +97,7 @@ namespace Strada.Core.ECS.Storage
 
         public bool TryGet(int entityIndex, out T component)
         {
-            if (entityIndex < _sparse.Length)
+            if ((uint)entityIndex < (uint)_sparse.Length)
             {
                 int denseIndex = _sparse[entityIndex];
                 if (denseIndex >= 0 && denseIndex < _count)
@@ -109,7 +113,7 @@ namespace Strada.Core.ECS.Storage
 
         public void Set(int entityIndex, T component)
         {
-            if (entityIndex >= _sparse.Length || _sparse[entityIndex] < 0)
+            if ((uint)entityIndex >= (uint)_sparse.Length || _sparse[entityIndex] < 0)
                 throw new InvalidOperationException($"Entity {entityIndex} does not exist in sparse set");
             _data[_sparse[entityIndex]] = component;
         }
@@ -119,7 +123,7 @@ namespace Strada.Core.ECS.Storage
         public int* GetDenseEntityReadOnlyPtr() => (int*)_dense.GetUnsafeReadOnlyPtr();
         public T* GetDataReadOnlyPtr() => (T*)_data.GetUnsafeReadOnlyPtr();
         public int* GetSparsePtr() => (int*)_sparse.GetUnsafePtr();
-        public int GetDenseIndex(int entityIndex) => entityIndex < _sparse.Length ? _sparse[entityIndex] : -1;
+        public int GetDenseIndex(int entityIndex) => (uint)entityIndex < (uint)_sparse.Length ? _sparse[entityIndex] : -1;
 
         public NativeSlice<T> GetDataSlice() => new NativeSlice<T>(_data, 0, _count);
         public NativeSlice<int> GetEntitySlice() => new NativeSlice<int>(_dense, 0, _count);

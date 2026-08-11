@@ -18,21 +18,47 @@ namespace Strada.Core.ECS.Systems
             set => _lastJobHandle = value;
         }
 
-        protected EntityCommandBuffer CommandBuffer
+        /// <summary>
+        /// The system's deferred command buffer.
+        /// </summary>
+        /// <remarks>
+        /// Returned BY REFERENCE. EntityCommandBuffer is a mutable struct: returning it by
+        /// value handed every caller a copy, so `CommandBuffer.CreateEntity()` incremented the
+        /// copy's counter and always returned 0, and the recorded commands were discarded with
+        /// the copy — every deferred command then threw at playback.
+        /// </remarks>
+        protected ref EntityCommandBuffer CommandBuffer
         {
             get
             {
                 if (!_commandBufferCreated)
                 {
-                    _commandBuffer = new EntityCommandBuffer(Allocator.TempJob);
+                    // Persistent, not TempJob: this buffer lives for the system's lifetime, and
+                    // TempJob allocations older than 4 frames trigger a leak warning every frame.
+                    _commandBuffer = new EntityCommandBuffer(Allocator.Persistent);
                     _commandBufferCreated = true;
                 }
-                return _commandBuffer;
+                return ref _commandBuffer;
             }
         }
 
         protected override void OnInitialize() => OnCreate();
-        protected override void OnDispose() => OnDestroy();
+
+        protected override void OnDispose()
+        {
+            // In-flight jobs hold raw pointers into the component storages that World.Dispose
+            // is about to free. Completing here closes that use-after-free window.
+            _lastJobHandle.Complete();
+            _lastJobHandle = default;
+
+            if (_commandBufferCreated)
+            {
+                _commandBuffer.Dispose();
+                _commandBufferCreated = false;
+            }
+
+            OnDestroy();
+        }
 
         protected virtual void OnCreate() { }
         protected virtual void OnDestroy() { }

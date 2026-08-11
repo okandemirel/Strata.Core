@@ -74,6 +74,9 @@ namespace Strada.Core.ECS.Jobs
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void AddComponent<T>(Entity entity, T component) where T : unmanaged, IComponent
         {
+            // Registers the playback handler while T is still known. Playback only sees a
+            // type hash, so without this the command is silently discarded at replay.
+            ComponentPlayback.EnsureHandler<T>();
             WriteCommand(EntityOperation.AddComponent);
             WriteEntity(entity);
             WriteTypeHash<T>();
@@ -83,6 +86,9 @@ namespace Strada.Core.ECS.Jobs
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void AddComponent<T>(int deferredEntityIndex, T component) where T : unmanaged, IComponent
         {
+            // Registers the playback handler while T is still known. Playback only sees a
+            // type hash, so without this the command is silently discarded at replay.
+            ComponentPlayback.EnsureHandler<T>();
             WriteCommand(EntityOperation.AddComponent);
             WriteDeferredEntity(deferredEntityIndex);
             WriteTypeHash<T>();
@@ -92,6 +98,9 @@ namespace Strada.Core.ECS.Jobs
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void RemoveComponent<T>(Entity entity) where T : unmanaged, IComponent
         {
+            // Registers the playback handler while T is still known. Playback only sees a
+            // type hash, so without this the command is silently discarded at replay.
+            ComponentPlayback.EnsureHandler<T>();
             WriteCommand(EntityOperation.RemoveComponent);
             WriteEntity(entity);
             WriteTypeHash<T>();
@@ -100,6 +109,9 @@ namespace Strada.Core.ECS.Jobs
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void SetComponent<T>(Entity entity, T component) where T : unmanaged, IComponent
         {
+            // Registers the playback handler while T is still known. Playback only sees a
+            // type hash, so without this the command is silently discarded at replay.
+            ComponentPlayback.EnsureHandler<T>();
             WriteCommand(EntityOperation.SetComponent);
             WriteEntity(entity);
             WriteTypeHash<T>();
@@ -359,18 +371,34 @@ namespace Strada.Core.ECS.Jobs
         {
             if (_handlers.TryGetValue(typeHash, out var handler))
                 handler.AddComponent(em, entity, data, size);
+            else
+                WarnMissingHandler(typeHash, nameof(AddComponent));
         }
 
         public static void RemoveComponent(EntityManager em, Entity entity, ulong typeHash)
         {
             if (_handlers.TryGetValue(typeHash, out var handler))
                 handler.RemoveComponent(em, entity);
+            else
+                WarnMissingHandler(typeHash, nameof(RemoveComponent));
         }
 
         public static unsafe void SetComponent(EntityManager em, Entity entity, ulong typeHash, byte* data, int size)
         {
             if (_handlers.TryGetValue(typeHash, out var handler))
                 handler.SetComponent(em, entity, data, size);
+            else
+                WarnMissingHandler(typeHash, nameof(SetComponent));
+        }
+
+        // A command whose type hash has no handler used to be discarded without a trace.
+        // Recording now calls EnsureHandler<T>(), so reaching this means the buffer was
+        // written by a path that bypassed the generic record API.
+        private static void WarnMissingHandler(ulong typeHash, string operation)
+        {
+            UnityEngine.Debug.LogError(
+                $"[Strada] EntityCommandBuffer.{operation}: no playback handler registered for type hash {typeHash}. " +
+                "The command was discarded. Call ComponentPlayback.EnsureHandler<T>() for this component type.");
         }
 
         public static void EnsureHandler<T>() where T : unmanaged, IComponent

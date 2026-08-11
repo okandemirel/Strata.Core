@@ -264,7 +264,7 @@ namespace Strada.Core.Editor
             if (obj == null)
                 return "Assets";
 
-            var path = AssetDatabase.GetAssetPath(obj.GetInstanceID());
+            var path = AssetDatabase.GetAssetPath(obj);
             if (string.IsNullOrEmpty(path))
                 return "Assets";
 

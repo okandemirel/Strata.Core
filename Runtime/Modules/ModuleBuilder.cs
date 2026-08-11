@@ -9,6 +9,20 @@ namespace Strada.Core.Modules
     /// </summary>
     public sealed class ModuleBuilder : IModuleBuilder
     {
+        // ContainerBuilder exposes Register<T>(Lifetime) and Register<TInterface,TImplementation>(Lifetime).
+        // Both have the identical parameter signature (Lifetime), so the arity-agnostic
+        // GetMethod(name, Type[]) overload matches both and throws AmbiguousMatchException.
+        // The generic-arity-aware overload is the only one that can tell them apart.
+        private static readonly System.Reflection.MethodInfo SelfRegisterMethod =
+            typeof(ContainerBuilder).GetMethod(nameof(ContainerBuilder.Register), 1, new[] { typeof(Lifetime) })
+            ?? throw new InvalidOperationException(
+                "ContainerBuilder.Register<T>(Lifetime) not found — Strada.Core is built against an incompatible ContainerBuilder.");
+
+        private static readonly System.Reflection.MethodInfo PairRegisterMethod =
+            typeof(ContainerBuilder).GetMethod(nameof(ContainerBuilder.Register), 2, new[] { typeof(Lifetime) })
+            ?? throw new InvalidOperationException(
+                "ContainerBuilder.Register<TInterface,TImplementation>(Lifetime) not found — Strada.Core is built against an incompatible ContainerBuilder.");
+
         private readonly ContainerBuilder _containerBuilder;
 
         /// <summary>
@@ -44,29 +58,15 @@ namespace Strada.Core.Modules
                 throw new ArgumentNullException(interfaceType == null ? nameof(interfaceType) : nameof(implementationType));
             }
 
-            var registerMethod = typeof(ContainerBuilder)
-                .GetMethod(nameof(ContainerBuilder.Register), new[] { typeof(Lifetime) });
-
-            if (registerMethod == null)
-            {
-                throw new InvalidOperationException("Could not find Register method on ContainerBuilder");
-            }
-
             if (interfaceType == implementationType)
             {
-                var genericMethod = registerMethod.MakeGenericMethod(implementationType);
+                var genericMethod = SelfRegisterMethod.MakeGenericMethod(implementationType);
                 genericMethod.Invoke(_containerBuilder, new object[] { lifetime });
             }
             else
             {
-                var twoTypeRegisterMethod = typeof(ContainerBuilder)
-                    .GetMethod(nameof(ContainerBuilder.Register), 2, new[] { typeof(Lifetime) });
-
-                if (twoTypeRegisterMethod != null)
-                {
-                    var genericMethod = twoTypeRegisterMethod.MakeGenericMethod(interfaceType, implementationType);
-                    genericMethod.Invoke(_containerBuilder, new object[] { lifetime });
-                }
+                var genericMethod = PairRegisterMethod.MakeGenericMethod(interfaceType, implementationType);
+                genericMethod.Invoke(_containerBuilder, new object[] { lifetime });
             }
 
             return this;

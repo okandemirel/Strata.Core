@@ -20,16 +20,21 @@ namespace Strada.Core.Sync
     public sealed class ReactiveProperty<T> : IReadOnlyReactiveProperty<T>, IDisposable
     {
         private T _value;
-        private readonly List<Action<T>> _handlers = new(4);
-        private readonly EqualityComparer<T> _comparer = EqualityComparer<T>.Default;
+        // Copy-on-write: mutation rebuilds the array, notification just reads it. This is the
+        // same shape EventBus.EventChannel<T> already uses. The previous List + per-notify
+        // ToArray() allocated a fresh Action<T>[] on EVERY value change.
+        private Action<T>[] _handlers = Array.Empty<Action<T>>();
+        // static: EqualityComparer<T>.Default is per-closed-generic anyway, so an instance
+        // field cost 8 bytes on every ReactiveProperty for nothing.
+        private static readonly EqualityComparer<T> _comparer = EqualityComparer<T>.Default;
         private bool _disposed;
 
         public ReactiveProperty() => _value = default;
 
         public ReactiveProperty(T initialValue) => _value = initialValue;
 
-        public int SubscriberCount => _handlers.Count;
-        public bool HasSubscribers => _handlers.Count > 0;
+        public int SubscriberCount => _handlers.Length;
+        public bool HasSubscribers => _handlers.Length > 0;
 
         public T Value
         {
@@ -63,7 +68,11 @@ namespace Strada.Core.Sync
         public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
-            _handlers.Add(handler);
+            var current = _handlers;
+            var grown = new Action<T>[current.Length + 1];
+            Array.Copy(current, grown, current.Length);
+            grown[current.Length] = handler;
+            _handlers = grown;
             return new Strada.Core.SubscriptionToken(() => Unsubscribe(handler));
         }
 
@@ -83,13 +92,22 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Unsubscribe(Action<T> handler)
         {
-            for (int i = _handlers.Count - 1; i >= 0; i--)
+            var current = _handlers;
+            for (int i = current.Length - 1; i >= 0; i--)
             {
-                if (ReferenceEquals(_handlers[i], handler))
+                if (!ReferenceEquals(current[i], handler)) continue;
+
+                if (current.Length == 1)
                 {
-                    _handlers.RemoveAt(i);
-                    break;
+                    _handlers = Array.Empty<Action<T>>();
+                    return;
                 }
+
+                var shrunk = new Action<T>[current.Length - 1];
+                Array.Copy(current, 0, shrunk, 0, i);
+                Array.Copy(current, i + 1, shrunk, i, current.Length - i - 1);
+                _handlers = shrunk;
+                return;
             }
         }
 
@@ -104,14 +122,42 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Notify()
         {
-            var snapshot = _handlers.ToArray();
+            // Zero allocation: the array is immutable once published, so reading the field
+            // IS the snapshot. A handler that subscribes/unsubscribes during notification
+            // swaps in a new array and takes effect on the next cycle, exactly as before.
+            var snapshot = _handlers;
             for (int i = 0; i < snapshot.Length; i++)
                 snapshot[i](_value);
         }
 
         public void Clear()
         {
-            _handlers.Clear();
+            _handlers = Array.Empty<Action<T>>();
+        }
+
+        private static THandler[] AppendHandler<THandler>(THandler[] current, THandler handler)
+            where THandler : class
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            var grown = new THandler[current.Length + 1];
+            Array.Copy(current, grown, current.Length);
+            grown[current.Length] = handler;
+            return grown;
+        }
+
+        private static THandler[] RemoveHandler<THandler>(THandler[] current, THandler handler)
+            where THandler : class
+        {
+            for (int i = current.Length - 1; i >= 0; i--)
+            {
+                if (!ReferenceEquals(current[i], handler)) continue;
+                if (current.Length == 1) return Array.Empty<THandler>();
+                var shrunk = new THandler[current.Length - 1];
+                Array.Copy(current, 0, shrunk, 0, i);
+                Array.Copy(current, i + 1, shrunk, i, current.Length - i - 1);
+                return shrunk;
+            }
+            return current;
         }
 
         public void Dispose()
@@ -127,9 +173,10 @@ namespace Strada.Core.Sync
     public sealed class ReactiveCollection<T> : IDisposable
     {
         private readonly List<T> _items = new();
-        private readonly List<Action<T>> _addHandlers = new(4);
-        private readonly List<Action<T>> _removeHandlers = new(4);
-        private readonly List<Action> _clearHandlers = new(2);
+        // Copy-on-write, as in ReactiveProperty<T> above: notification must not allocate.
+        private Action<T>[] _addHandlers = Array.Empty<Action<T>>();
+        private Action<T>[] _removeHandlers = Array.Empty<Action<T>>();
+        private Action[] _clearHandlers = Array.Empty<Action>();
         private bool _disposed;
 
         public int Count => _items.Count;
@@ -168,31 +215,31 @@ namespace Strada.Core.Sync
             NotifyClear();
         }
 
-        public void OnAdd(Action<T> handler) => _addHandlers.Add(handler);
-        public void OnRemove(Action<T> handler) => _removeHandlers.Add(handler);
-        public void OnClear(Action handler) => _clearHandlers.Add(handler);
+        public void OnAdd(Action<T> handler) => _addHandlers = AppendHandler(_addHandlers, handler);
+        public void OnRemove(Action<T> handler) => _removeHandlers = AppendHandler(_removeHandlers, handler);
+        public void OnClear(Action handler) => _clearHandlers = AppendHandler(_clearHandlers, handler);
 
-        public void OffAdd(Action<T> handler) => _addHandlers.Remove(handler);
-        public void OffRemove(Action<T> handler) => _removeHandlers.Remove(handler);
-        public void OffClear(Action handler) => _clearHandlers.Remove(handler);
+        public void OffAdd(Action<T> handler) => _addHandlers = RemoveHandler(_addHandlers, handler);
+        public void OffRemove(Action<T> handler) => _removeHandlers = RemoveHandler(_removeHandlers, handler);
+        public void OffClear(Action handler) => _clearHandlers = RemoveHandler(_clearHandlers, handler);
 
         private void NotifyAdd(T item)
         {
-            var snapshot = _addHandlers.ToArray();
+            var snapshot = _addHandlers;
             for (int i = 0; i < snapshot.Length; i++)
                 snapshot[i](item);
         }
 
         private void NotifyRemove(T item)
         {
-            var snapshot = _removeHandlers.ToArray();
+            var snapshot = _removeHandlers;
             for (int i = 0; i < snapshot.Length; i++)
                 snapshot[i](item);
         }
 
         private void NotifyClear()
         {
-            var snapshot = _clearHandlers.ToArray();
+            var snapshot = _clearHandlers;
             for (int i = 0; i < snapshot.Length; i++)
                 snapshot[i]();
         }
@@ -202,9 +249,9 @@ namespace Strada.Core.Sync
             if (_disposed) return;
             _disposed = true;
             _items.Clear();
-            _addHandlers.Clear();
-            _removeHandlers.Clear();
-            _clearHandlers.Clear();
+            _addHandlers = Array.Empty<Action<T>>();
+            _removeHandlers = Array.Empty<Action<T>>();
+            _clearHandlers = Array.Empty<Action>();
         }
     }
 }

@@ -219,7 +219,11 @@ namespace Strada.Core.Logging
 
         private static void LogInternal(string message, LogType type, LogModule module, bool isDeepLog)
         {
-            var stackTrace = Environment.StackTrace;
+            // Environment.StackTrace is a full managed stack walk plus a multi-KB string.
+            // It used to run on EVERY log call, including calls that were about to be
+            // discarded. Only diagnostic severities actually need it, and only in builds
+            // where someone can read it.
+            string stackTrace = ShouldCaptureStackTrace(type) ? Environment.StackTrace : string.Empty;
             var entry = new LogEntry(message, type, module, stackTrace, isDeepLog);
 
             AddToBuffer(entry);
@@ -234,9 +238,27 @@ namespace Strada.Core.Logging
             {
                 OnLogAdded?.Invoke(entry);
             }
-            catch
+            catch (Exception ex)
             {
+                // A misbehaving log subscriber must not break logging, but swallowing it
+                // silently hid real errors. Report it through Unity directly (not through
+                // StradaLog, which would re-enter this method).
+                UnityEngine.Debug.LogWarning($"[Strada] A StradaLog.OnLogAdded subscriber threw: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Stack traces are captured for diagnostic severities only, and only where they can
+        /// be read. In a release player build this returns false for every severity, which
+        /// also keeps developer paths and internal type layout out of shipped logs.
+        /// </summary>
+        private static bool ShouldCaptureStackTrace(LogType type)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            return type != LogType.Info;
+#else
+            return false;
+#endif
         }
 
         private static void AddToBuffer(LogEntry entry)

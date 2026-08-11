@@ -49,15 +49,23 @@ namespace Strada.Core.ECS.World
 
         public World Build()
         {
-            var entities = new EntityManager();
+            // WithInitialEntityCapacity was previously accepted and then silently ignored here.
+            var entities = new EntityManager(_initialEntityCapacity);
             var scheduler = new SystemScheduler();
             var bus = _eventBus ?? new EventBus();
+            var handleRegistry = new Sync.EntityHandleRegistry();
 
             var world = new World(entities, scheduler, bus);
 
             foreach (var (_, phase, factory) in _systemFactories)
             {
                 var system = factory(world);
+
+                // Without this a builder-constructed system has a null EntityManager and throws
+                // on its first update, every frame. SystemRunner.InjectSystem does the same.
+                if (system is Systems.SystemBase systemBase)
+                    systemBase.Inject(entities, bus, handleRegistry);
+
                 scheduler.AddSystem(system, phase);
             }
 

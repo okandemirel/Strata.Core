@@ -19,6 +19,12 @@ namespace Strada.Core.ECS.Core
     {
         private const int InitialCapacity = 1024;
 
+        /// <summary>
+        /// Upper bound on the entity index space. Capacity growth is clamped to this, and any
+        /// request beyond it throws rather than overflowing into a negative allocation size.
+        /// </summary>
+        public const int MaxEntityCapacity = int.MaxValue / 2;
+
         private NativeArray<int> _versions;
         private NativeArray<byte> _active;
         private NativeList<int> _recycledIndices;
@@ -34,6 +40,15 @@ namespace Strada.Core.ECS.Core
 
         public EntityManager(int initialCapacity)
         {
+            // A zero or negative capacity would make the doubling growth in EnsureCapacity
+            // unable to ever reach the requested size.
+            if (initialCapacity <= 0)
+                throw new ArgumentOutOfRangeException(nameof(initialCapacity),
+                    $"Initial entity capacity must be positive (got {initialCapacity}).");
+            if (initialCapacity > MaxEntityCapacity)
+                throw new ArgumentOutOfRangeException(nameof(initialCapacity),
+                    $"Initial entity capacity {initialCapacity} exceeds the maximum of {MaxEntityCapacity}.");
+
             _versions = new NativeArray<int>(initialCapacity, Allocator.Persistent);
             _active = new NativeArray<byte>(initialCapacity, Allocator.Persistent);
             _recycledIndices = new NativeList<int>(256, Allocator.Persistent);
@@ -302,15 +317,27 @@ namespace Strada.Core.ECS.Core
             if (required <= _versions.Length)
                 return;
 
-            int newCapacity = _versions.Length;
+            if (required > MaxEntityCapacity)
+                throw new ArgumentOutOfRangeException(nameof(required),
+                    $"Requested entity capacity {required} exceeds the maximum of {MaxEntityCapacity}.");
+
+            // Grow in long so the doubling cannot overflow into a negative value, and clamp
+            // inside the loop. A clamp placed after the loop is unreachable: an overflowed
+            // (or zero) capacity never satisfies the loop condition, so the loop never exits.
+            long newCapacity = _versions.Length > 0 ? _versions.Length : 1;
             while (newCapacity < required)
+            {
                 newCapacity *= 2;
+                if (newCapacity > MaxEntityCapacity)
+                {
+                    newCapacity = MaxEntityCapacity;
+                    break;
+                }
+            }
 
-            if (newCapacity < 0 || newCapacity > int.MaxValue / 2)
-                newCapacity = int.MaxValue / 2;
-
-            var newVersions = new NativeArray<int>(newCapacity, Allocator.Persistent);
-            var newActive = new NativeArray<byte>(newCapacity, Allocator.Persistent);
+            int capacity = (int)newCapacity;
+            var newVersions = new NativeArray<int>(capacity, Allocator.Persistent);
+            var newActive = new NativeArray<byte>(capacity, Allocator.Persistent);
 
             NativeArray<int>.Copy(_versions, newVersions, _versions.Length);
             NativeArray<byte>.Copy(_active, newActive, _active.Length);
@@ -323,15 +350,23 @@ namespace Strada.Core.ECS.Core
         }
         public void RestoreState(int nextEntityIndex, int[] activeIndices, int[] versions)
         {
+            if (activeIndices == null) throw new ArgumentNullException(nameof(activeIndices));
+            if (versions == null) throw new ArgumentNullException(nameof(versions));
+            if (nextEntityIndex < 1 || nextEntityIndex > MaxEntityCapacity)
+                throw new ArgumentOutOfRangeException(nameof(nextEntityIndex),
+                    $"nextEntityIndex must be in [1, {MaxEntityCapacity}] (got {nextEntityIndex}).");
+
             Clear();
-            
+
             EnsureCapacity(nextEntityIndex);
             _nextEntityIndex = nextEntityIndex;
-            
+
             for (int i = 0; i < activeIndices.Length; i++)
             {
                 int idx = activeIndices[i];
-                if (idx < _active.Length)
+                // Unsigned compare rejects negatives and the upper bound in one branch — a
+                // negative index here would otherwise be an arbitrary-offset 1-byte write.
+                if ((uint)idx < (uint)_active.Length)
                 {
                     _active[idx] = 1;
                     _entityCount++;

@@ -12,6 +12,9 @@ namespace Strada.Core.Sync
     public sealed class ViewPool<TView> : IViewPool, IDisposable where TView : EntityView
     {
         private readonly Stack<TView> _available;
+        // Membership guard: without it a second Despawn(view) pushes the same instance onto
+        // the free stack twice, and two entities then silently share one view.
+        private readonly HashSet<TView> _pooled;
         private readonly List<TView> _active;
         private readonly Dictionary<long, int> _entityToActiveIndex;
         private readonly GameObject _prefab;
@@ -46,6 +49,7 @@ namespace Strada.Core.Sync
             _activeRoot = activeRoot;
             _maxSize = maxSize;
             _available = new Stack<TView>(Math.Max(initialSize, 16));
+            _pooled = new HashSet<TView>();
             _active = new List<TView>(Math.Max(initialSize, 16));
             _entityToActiveIndex = new Dictionary<long, int>(Math.Max(initialSize, 16));
 
@@ -63,6 +67,7 @@ namespace Strada.Core.Sync
             if (_available.Count > 0)
             {
                 view = _available.Pop();
+                _pooled.Remove(view);
                 view.gameObject.SetActive(true);
             }
             else
@@ -103,6 +108,14 @@ namespace Strada.Core.Sync
             if (view == null) return;
             if (_disposed) return;
 
+            if (_pooled.Contains(view))
+            {
+                StradaLog.LogWarning(
+                    $"ViewPool<{typeof(TView).Name}>.Despawn called twice for the same view; ignoring the second call.",
+                    LogModule.Sync);
+                return;
+            }
+
             var entity = view.Entity;
             var entityKey = GetEntityKey(entity);
 
@@ -131,6 +144,7 @@ namespace Strada.Core.Sync
                 if (_poolRoot != null)
                     view.transform.SetParent(_poolRoot, false);
                 _available.Push(view);
+                _pooled.Add(view);
             }
             else
             {
@@ -190,6 +204,7 @@ namespace Strada.Core.Sync
                 if (view != null && view.gameObject != null)
                     UnityEngine.Object.Destroy(view.gameObject);
             }
+            _pooled.Clear();
 
             _totalCreated = 0;
         }

@@ -49,13 +49,54 @@ namespace Strada.Core.Core
             _disposed = true;
             _initialized = false;
 
-            _updateCallbacks.Clear();
-            _lateUpdateCallbacks.Clear();
-            _fixedUpdateCallbacks.Clear();
-            _initCallbacks.Clear();
+            // The callback lists are NOT cleared here. They are shared with registrants
+            // (ECSAdapter, PatternManager, user code) who remove themselves via the
+            // Unregister* methods; clearing them on shutdown silently and permanently
+            // unhooked every one of them.
 
-            var defaultLoop = UnityEngine.LowLevel.PlayerLoop.GetDefaultPlayerLoop();
-            UnityEngine.LowLevel.PlayerLoop.SetPlayerLoop(defaultLoop);
+            // Remove only the systems Strada inserted, instead of resetting Unity's entire
+            // player loop to default — that reset also discarded every insertion made by
+            // other packages and by user code.
+            var loop = UnityEngine.LowLevel.PlayerLoop.GetCurrentPlayerLoop();
+            RemoveStradaSystems(ref loop);
+            UnityEngine.LowLevel.PlayerLoop.SetPlayerLoop(loop);
+        }
+
+        private static void RemoveStradaSystems(ref PlayerLoopSystem loop)
+        {
+            var subSystems = loop.subSystemList;
+            if (subSystems == null) return;
+
+            for (int i = 0; i < subSystems.Length; i++)
+            {
+                var children = subSystems[i].subSystemList;
+                if (children == null) continue;
+
+                int removed = 0;
+                for (int c = 0; c < children.Length; c++)
+                {
+                    if (IsStradaSystem(children[c].type)) removed++;
+                }
+
+                if (removed == 0) continue;
+
+                var trimmed = new PlayerLoopSystem[children.Length - removed];
+                int w = 0;
+                for (int c = 0; c < children.Length; c++)
+                {
+                    if (!IsStradaSystem(children[c].type)) trimmed[w++] = children[c];
+                }
+
+                subSystems[i].subSystemList = trimmed;
+            }
+        }
+
+        private static bool IsStradaSystem(Type type)
+        {
+            return type == typeof(StradaInitialization)
+                || type == typeof(StradaUpdate)
+                || type == typeof(StradaLateUpdate)
+                || type == typeof(StradaFixedUpdate);
         }
 
         public static void RegisterUpdate(Action<float> callback)

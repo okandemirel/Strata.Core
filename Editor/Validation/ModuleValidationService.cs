@@ -14,7 +14,10 @@ namespace Strada.Core.Editor.Validation
     /// </summary>
     public static class ModuleValidationService
     {
-        private static readonly Dictionary<int, ModuleValidationResult> _validationCache = new();
+        // Keyed by the ModuleConfig reference rather than GetInstanceID(): UnityEngine.Object
+        // hashes/compares by instance id anyway, and GetInstanceID() is an error-level
+        // obsolete from Unity 6000.5 onwards.
+        private static readonly Dictionary<ModuleConfig, ModuleValidationResult> _validationCache = new();
         private static readonly HashSet<int> _pendingValidation = new();
 
         /// <summary>
@@ -26,13 +29,11 @@ namespace Strada.Core.Editor.Validation
             if (module == null)
                 return ModuleValidationResult.Invalid("Module is null");
 
-            var instanceId = module.GetInstanceID();
-
-            if (_validationCache.TryGetValue(instanceId, out var cached))
+            if (_validationCache.TryGetValue(module, out var cached))
                 return cached;
 
             var result = PerformValidation(module);
-            _validationCache[instanceId] = result;
+            _validationCache[module] = result;
             return result;
         }
 
@@ -163,7 +164,7 @@ namespace Strada.Core.Editor.Validation
         {
             if (module != null)
             {
-                _validationCache.Remove(module.GetInstanceID());
+                _validationCache.Remove(module);
             }
         }
 
