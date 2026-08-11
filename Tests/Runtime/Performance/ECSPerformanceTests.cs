@@ -485,7 +485,8 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
-            long memBefore = GC.GetTotalMemory(true);
+            long managedBefore = GC.GetTotalMemory(true);
+            long nativeBefore = _entityManager.Store.AllocatedBytes;
 
             for (int i = 0; i < Count; i++)
             {
@@ -494,9 +495,17 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 _entityManager.AddComponent(entity, new Velocity { X = 1, Y = 2, Z = 3 });
             }
 
-            long memAfter = GC.GetTotalMemory(true);
-            long usedBytes = memAfter - memBefore;
+            // Component data lives in NativeArrays, which the managed GC cannot see:
+            // GC.GetTotalMemory reports NONE of the component storage. Measuring the
+            // published per-entity memory figure with GC statistics alone therefore measures
+            // managed overhead and misses the thing being claimed. Native bytes are read from
+            // the storages' own allocated capacity.
+            long managedBytes = GC.GetTotalMemory(true) - managedBefore;
+            long nativeBytes = _entityManager.Store.AllocatedBytes - nativeBefore;
+            long usedBytes = managedBytes + nativeBytes;
             double bytesPerEntity = usedBytes / (double)Count;
+
+            UnityEngine.Debug.Log($"  Managed: {managedBytes / 1024.0:F1} KB | Native: {nativeBytes / 1024.0:F1} KB");
 
             double theoreticalMin = 28;
 

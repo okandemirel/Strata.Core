@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using NUnit.Framework;
+using UnityEngine.TestTools.Constraints;   // brings in the ConstraintExpression extension
+using UnityConstraints = UnityEngine.TestTools.Constraints;
 using Strada.Core.DI;
 
 namespace Strada.Core.Tests.Tests.Runtime.Performance
@@ -398,28 +400,17 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             builder.Register<ServiceA>(Lifetime.Transient);
             using var container = builder.Build();
 
-            for (int i = 0; i < WarmupIterations; i++)
-                container.Resolve<ServiceA>();
+            // A transient resolve constructs a new object every call, so it MUST allocate.
+            // Asserting that here keeps the measurement honest: if this ever reports
+            // no-allocation, the instrument is broken rather than the code being fast.
+            BenchmarkSink.Prime(() => BenchmarkSink.Consume(container.Resolve<ServiceA>()), WarmupIterations);
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            Assert.That(() => BenchmarkSink.Consume(container.Resolve<ServiceA>()),
+                UnityConstraints.Is.AllocatingGCMemory(),
+                "A transient resolve constructs a new instance, so it must allocate. " +
+                "If this fails, the allocation measurement is not working.");
 
-            long memBefore = GC.GetTotalMemory(true);
-
-            for (int i = 0; i < SmallIterations; i++)
-                container.Resolve<ServiceA>();
-
-            long memAfter = GC.GetTotalMemory(true);
-            long allocated = memAfter - memBefore;
-            double bytesPerOp = (double)allocated / SmallIterations;
-
-            UnityEngine.Debug.Log($"=== STRADA DI: GC Allocation ({SmallIterations:N0} resolutions) ===");
-            UnityEngine.Debug.Log($"  Total allocated: {allocated / 1024.0:F2}KB");
-            UnityEngine.Debug.Log($"  Per-op: {bytesPerOp:F1} bytes");
-            UnityEngine.Debug.Log($"  (Expected: ~96 bytes for 4 objects)");
-
-            Assert.Less(bytesPerOp, 200, "Should allocate less than 200 bytes per resolution");
+            UnityEngine.Debug.Log("=== STRADA DI: Transient resolve allocates (as expected) ===");
         }
 
         [Test]
@@ -432,27 +423,16 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             builder.Register<ServiceA>(Lifetime.Singleton);
             using var container = builder.Build();
 
-            container.Resolve<ServiceA>();
+            BenchmarkSink.Prime(() => BenchmarkSink.Consume(container.Resolve<ServiceA>()));
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            // This is the README's "GC Allocation (Singleton resolve): 0 bytes" claim, now
+            // asserted with the only mechanism on this runtime that actually observes an
+            // allocation.
+            Assert.That(() => BenchmarkSink.Consume(container.Resolve<ServiceA>()),
+                UnityConstraints.Is.Not.AllocatingGCMemory(),
+                "README publishes 0 bytes for a singleton resolve.");
 
-            long memBefore = GC.GetTotalMemory(true);
-
-            for (int i = 0; i < LargeIterations; i++)
-                container.Resolve<ServiceA>();
-
-            long memAfter = GC.GetTotalMemory(true);
-            long allocated = memAfter - memBefore;
-            double bytesPerOp = (double)allocated / LargeIterations;
-
-            UnityEngine.Debug.Log($"=== STRADA DI: GC Allocation Singleton ({LargeIterations:N0} resolutions) ===");
-            UnityEngine.Debug.Log($"  Total allocated: {allocated / 1024.0:F2}KB");
-            UnityEngine.Debug.Log($"  Per-op: {bytesPerOp:F2} bytes");
-            UnityEngine.Debug.Log($"  (Expected: ~0 bytes - cached lookup)");
-
-            Assert.Less(bytesPerOp, 1, "Singleton should allocate near-zero per resolution");
+            UnityEngine.Debug.Log("=== STRADA DI: Singleton resolve is allocation-free (verified) ===");
         }
 
         [Test]

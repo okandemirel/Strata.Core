@@ -19,6 +19,14 @@ namespace Strada.Core.ECS.Storage
 
         public int StructuralVersion => _structuralVersion;
 
+        /// <summary>
+        /// Native bytes held by the three backing arrays, by allocated capacity.
+        /// </summary>
+        public long AllocatedBytes =>
+            (long)_sparse.Length * sizeof(int)
+            + (long)_dense.Length * sizeof(int)
+            + (long)_data.Length * UnsafeUtility.SizeOf<T>();
+
         public int Count => _count;
         public int Capacity => _dense.Length;
         public int SparseCapacity => _sparse.Length;

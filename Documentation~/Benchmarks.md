@@ -1,3 +1,32 @@
+> ## ⚠ Status of the figures in this document
+>
+> An audit of the benchmark harness found that most numbers below cannot currently be
+> defended, and that this document contradicts `README.md` in several places (scoped resolve
+> is listed here as 78ns and there as 21ns; the comparison table below places VContainer
+> *ahead* of Strada while the README places it behind). Specific problems:
+>
+> - **Single sample.** The `Stopwatch` benchmarks take exactly one measurement each. There is
+>   no median, no interquartile range and no outlier rejection, so the claim of "multiple runs
+>   averaged for stability" below is not true of them.
+> - **Dead-code elimination.** Several benchmarks discard the value they compute, which the
+>   optimiser is free to delete entirely.
+> - **Allocation was never measured.** The GC benchmarks bracketed the measured region with
+>   `GC.GetTotalMemory(forceFullCollection: true)`, which reports the live heap *after* a
+>   collection — the transient garbage being measured had already been collected. The
+>   singleton-resolve zero-allocation claim has since been re-asserted with
+>   `Is.Not.AllocatingGCMemory()` and holds; the others have not been re-measured.
+> - **Per-entity memory measured nothing.** Component data lives in `NativeArray`s, which the
+>   managed GC does not see, so the old measurement reported 0 KB. Measured properly the
+>   figure is **46.5 bytes/entity** for two components at 100k entities.
+> - **Editor-Mono only.** Shipped games run IL2CPP. No IL2CPP measurement exists yet, and the
+>   DI container's `Expression.Compile()` path in particular behaves differently there.
+> - **Competitor numbers are not comparable.** They were not produced on this machine or in
+>   this harness. MessagePipe has never published a nanosecond figure at all.
+>
+> Treat every number below as provisional until it is reproduced under a harness with warmup,
+> repeated samples, median + MAD reporting, a consume/sink to defeat dead-code elimination,
+> and an IL2CPP run.
+
 # Benchmarks
 
 Complete performance data for all Strada systems on Apple Silicon (Unity 6, Mono runtime).

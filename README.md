@@ -4,7 +4,7 @@
 
 > **Language**: [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [한국어](README.ko.md)
 
-[![Tests](https://img.shields.io/badge/tests-324%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-564%20passing-brightgreen)]()
 [![Unity](https://img.shields.io/badge/Unity-6000.0%2B-blue)]()
 [![.NET](https://img.shields.io/badge/.NET-Standard%202.1-purple)]()
 
@@ -198,7 +198,14 @@ health.Value = 75; // healthBar updates automatically
 
 ## Performance
 
-**Honest benchmarks** measured on Apple Silicon (Unity 6, Mono):
+Measured on Apple Silicon, Unity 6, **Mono, in the Editor**.
+
+> **Read these numbers with the following caveats.** They are Editor-Mono figures; shipped
+> games run IL2CPP, where the DI container's `Expression.Compile()` path behaves differently
+> and no IL2CPP measurement has been taken yet. Most timings below come from single-sample
+> `Stopwatch` benchmarks with no median or outlier rejection, so they carry unknown variance.
+> Only the entries explicitly marked as asserted are currently backed by a measurement that
+> can fail. See `Documentation~/Benchmarks.md` for per-claim status.
 
 ### DI Container
 
@@ -229,18 +236,24 @@ health.Value = 75; // healthBar updates automatically
 
 | Metric | Value |
 |--------|-------|
-| Memory per Entity (2 components) | 56 bytes |
-| GC Allocation (Singleton resolve) | 0 bytes |
-| GC Allocation (Scoped resolve) | 0 bytes |
+| Memory per Entity (2 components) | **46.5 bytes** (native storage; managed heap contributes 0) |
+| GC Allocation (Singleton resolve) | **0 bytes** (asserted with `Is.Not.AllocatingGCMemory`) |
+| GC Allocation (Scoped resolve) | not yet re-measured — see note below |
 
 ### Comparison
 
-| Framework | Resolution Speed | vs Manual |
-|-----------|------------------|-----------|
-| **Strada** | 0.11-0.27μs | **1.56x** |
-| VContainer | ~0.2-0.3μs | ~2x |
-| Reflex | ~0.5-1.0μs | ~3-5x |
-| Zenject | ~2-5μs | ~20-50x |
+**No cross-framework comparison is published here at present.** The table that used to sit in
+this section quoted competitor figures that were not measured on the same machine, in the same
+harness, or in some cases measured at all — Reflex publishes a directly comparable benchmark
+(10k transient resolves through a 4-level chain) whose number is *faster* than the figure that
+was attributed to it here, and `Documentation~/Benchmarks.md` simultaneously listed VContainer
+ahead of Strada. Quoting a competitor's worst case against your own best case is not a
+comparison.
+
+A comparative suite that runs Strada, VContainer, Reflex, Zenject and manual `new()` through
+one adapter interface, on one machine, in one interleaved run, is the prerequisite for making
+this claim again. Until it exists and its raw output is published, treat any relative ordering
+as unmeasured.
 
 ---
 
@@ -512,26 +525,27 @@ fsm.Update(deltaTime);
 
 ## Testing
 
+This repository is a Unity *package*: it has no `Assets/` or `ProjectSettings/`, so no Unity
+binary can open it directly. The scripts below synthesise the host project the Test Runner
+needs (including the mandatory `testables` entry, without which zero tests are discovered).
+
 ```bash
-# Run all tests (Unity must be closed)
-./run_tests.sh
+# Build the host project once, then compile and run the suite
+./Tools/ci/assemble-bench-project.sh "$PWD" /tmp/StradaBench
+./Tools/ci/compile.sh   /tmp/StradaBench            # fails on any compiler error
+./Tools/ci/run-tests.sh /tmp/StradaBench playmode   # prints total/passed/failed
 
-# Run functional tests only
-UNITY_PATH="/path/to/Unity" PROJECT_PATH="/path/to/project"
-"$UNITY_PATH" -batchmode -projectPath "$PROJECT_PATH" \
-  -runTests -testPlatform playmode \
-  -testCategory "!Performance"
-
-# Run benchmarks only
-"$UNITY_PATH" -batchmode -projectPath "$PROJECT_PATH" \
-  -runTests -testPlatform playmode \
-  -testCategory "Performance"
+# Functional tests only
+./Tools/ci/run-tests.sh /tmp/StradaBench playmode -testCategory "!Performance;!Benchmark"
 ```
 
-**Test Coverage:**
-- 330 functional tests (Hardened DI & ECS edge cases)
-- 94 performance benchmarks (Added realistic simulation scenarios)
-- All 424 tests passing
+The tests live in an assembly that targets all platforms, so they run under
+`-testPlatform playmode`; `editmode` discovers none of them.
+
+Set `UNITY` to point at a different editor version, e.g.
+`UNITY=/Applications/Unity/Hub/Editor/6000.0.58f1/Unity.app/Contents/MacOS/Unity`.
+
+**Test Coverage:** 564 tests, all passing.
 
 ---
 

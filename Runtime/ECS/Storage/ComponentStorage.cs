@@ -14,6 +14,16 @@ namespace Strada.Core.ECS.Storage
         IReadOnlyList<int> GetEntityIndices();
 
         /// <summary>
+        /// Bytes of native memory held by this storage.
+        /// </summary>
+        /// <remarks>
+        /// Component data lives in NativeArrays, which the managed GC does not see at all —
+        /// GC.GetTotalMemory reports none of it. Any per-entity memory figure derived from GC
+        /// statistics alone is therefore measuring managed overhead, not the storage.
+        /// </remarks>
+        long AllocatedBytes { get; }
+
+        /// <summary>
         /// Blocks until every scheduled job reading or writing this storage has finished.
         /// </summary>
         /// <remarks>
@@ -41,6 +51,12 @@ namespace Strada.Core.ECS.Storage
         {
             _pendingJobs = JobHandle.CombineDependencies(_pendingJobs, handle);
         }
+
+        /// <summary>
+        /// Bytes of native memory this storage currently holds (sparse + dense + component
+        /// data), based on allocated capacity rather than live count.
+        /// </summary>
+        public long AllocatedBytes => _sparseSet.AllocatedBytes;
 
         /// <inheritdoc/>
         public void CompletePendingJobs()
@@ -198,6 +214,20 @@ namespace Strada.Core.ECS.Storage
             return _storages.TryGetValue(typeof(T), out var storage)
                 ? (ComponentStorage<T>)storage
                 : null;
+        }
+
+        /// <summary>
+        /// Total native memory held across every component storage in this store.
+        /// </summary>
+        public long AllocatedBytes
+        {
+            get
+            {
+                long total = 0;
+                foreach (var storage in _storages.Values)
+                    total += storage.AllocatedBytes;
+                return total;
+            }
         }
 
         public void RemoveEntity(int entityIndex)
