@@ -14,10 +14,26 @@ namespace Strada.SourceGeneration
         private const int MinComponents = 9;
         private const int MaxComponents = 16;
 
+        /// <summary>
+        /// The assembly that owns the Strada.Core.ECS.Query namespace. These types belong in
+        /// it and nowhere else.
+        /// </summary>
+        private const string OwningAssembly = "Strada.Core";
+
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
-            context.RegisterPostInitializationOutput(ctx =>
+            // Emitted per-compilation and gated on the assembly name, NOT via
+            // RegisterPostInitializationOutput. Post-initialization output has no access to
+            // the compilation, so it emitted these types into every assembly that referenced
+            // the analyzer: duplicate definitions everywhere, and a hard compile error in any
+            // assembly without "Allow unsafe code" (the query structs use raw pointers).
+            var isOwningAssembly = context.CompilationProvider
+                .Select(static (compilation, _) => compilation.AssemblyName == OwningAssembly);
+
+            context.RegisterSourceOutput(isOwningAssembly, static (ctx, shouldEmit) =>
             {
+                if (!shouldEmit) return;
+
                 ctx.AddSource("Strada.Generated.EntityQuery.g.cs",
                     SourceText.From(GenerateAllCode(), Encoding.UTF8));
             });
@@ -30,6 +46,12 @@ namespace Strada.SourceGeneration
             sb.AppendLine("using System;");
             sb.AppendLine("using System.Runtime.CompilerServices;");
             sb.AppendLine("using Strada.Core.ECS.Storage;");
+            // The emitted code lives in Strada.Core.ECS.Query, so IComponent resolves by
+            // walking up to Strada.Core.ECS — but EntityManager is in the SIBLING namespace
+            // Strada.Core.ECS.Core, which namespace walking never reaches. Without this the
+            // generated ForEach extensions do not compile.
+            sb.AppendLine("using Strada.Core.ECS;");
+            sb.AppendLine("using Strada.Core.ECS.Core;");
             sb.AppendLine();
             sb.AppendLine("namespace Strada.Core.ECS.Query");
             sb.AppendLine("{");
