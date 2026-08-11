@@ -133,9 +133,9 @@ namespace Strada.Core.ECS.Query
         /// </summary>
         /// <remarks>
         /// DEPRECATED: Use Select&lt;T&gt;() instead for consistency.
-        /// This method will be removed in v2.0.
+        /// This method will be removed in v3.0.
         /// </remarks>
-        [Obsolete("Use Select<T>() instead. This method will be removed in v2.0.")]
+        [Obsolete("Use Select<T>() instead. This method will be removed in v3.0.")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public EntityQuery<T1> With<T1>() where T1 : unmanaged, IComponent => Select<T1>();
 
@@ -144,9 +144,9 @@ namespace Strada.Core.ECS.Query
         /// </summary>
         /// <remarks>
         /// DEPRECATED: Use Select&lt;T1, T2&gt;() instead for consistency.
-        /// This method will be removed in v2.0.
+        /// This method will be removed in v3.0.
         /// </remarks>
-        [Obsolete("Use Select<T1, T2>() instead. This method will be removed in v2.0.")]
+        [Obsolete("Use Select<T1, T2>() instead. This method will be removed in v3.0.")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public EntityQuery<T1, T2> With<T1, T2>()
             where T1 : unmanaged, IComponent
@@ -158,9 +158,9 @@ namespace Strada.Core.ECS.Query
         /// </summary>
         /// <remarks>
         /// DEPRECATED: Use Select&lt;T1, T2, T3&gt;() instead for consistency.
-        /// This method will be removed in v2.0.
+        /// This method will be removed in v3.0.
         /// </remarks>
-        [Obsolete("Use Select<T1, T2, T3>() instead. This method will be removed in v2.0.")]
+        [Obsolete("Use Select<T1, T2, T3>() instead. This method will be removed in v3.0.")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public EntityQuery<T1, T2, T3> With<T1, T2, T3>()
             where T1 : unmanaged, IComponent

@@ -23,6 +23,19 @@ namespace Strada.Core.Editor.Windows
         private HashSet<ConfigAsset> _selectedConfigs = new HashSet<ConfigAsset>();
         private Dictionary<ConfigCategory, bool> _categoryFoldouts = new Dictionary<ConfigCategory, bool>();
         private Dictionary<ConfigAsset, ValidationResult> _validationResults = new Dictionary<ConfigAsset, ValidationResult>();
+
+        // Filtering and grouping used to run from OnGUI - twice per pass, since both the stats
+        // header and the list asked for the filtered set - so they are computed only when the
+        // filter fields or the underlying config set actually change.
+        private List<ConfigAsset> _filteredConfigs;
+        private readonly Dictionary<ConfigCategory, List<ConfigAsset>> _groupedConfigs =
+            new Dictionary<ConfigCategory, List<ConfigAsset>>();
+        private readonly List<ConfigCategory> _sortedCategories = new List<ConfigCategory>();
+        private int _configsVersion;
+        private int _filterVersion = -1;
+        private string _filterNameSnapshot;
+        private string _filterTypeSnapshot;
+        private ConfigCategory _filterCategorySnapshot = ConfigCategory.All;
         private bool _showValidationErrors = false;
         private bool _selectAll = false;
 
@@ -59,6 +72,28 @@ namespace Strada.Core.Editor.Windows
             public ConfigCategory Category;
             public Type AssetType;
             public bool HasValidateMethod;
+
+            /// <summary>
+            /// Identity comes from the underlying asset, not the wrapper. Every refresh
+            /// builds brand-new wrappers, so reference identity would silently orphan every
+            /// entry in the selection set and the validation result map.
+            /// </summary>
+            public override bool Equals(object obj)
+            {
+                if (!(obj is ConfigAsset other)) return false;
+
+                // A wrapper around a destroyed or missing asset has no stable identity, so
+                // fall back to reference equality for it.
+                if (ReferenceEquals(Asset, null) || ReferenceEquals(other.Asset, null))
+                    return ReferenceEquals(this, other);
+
+                return Asset.GetHashCode() == other.Asset.GetHashCode();
+            }
+
+            public override int GetHashCode()
+            {
+                return ReferenceEquals(Asset, null) ? 0 : Asset.GetHashCode();
+            }
         }
 
         public class ValidationResult
@@ -414,23 +449,10 @@ namespace Strada.Core.Editor.Windows
             }
             else
             {
-                var grouped = new Dictionary<ConfigCategory, List<ConfigAsset>>();
-                foreach (var config in filteredConfigs)
+                for (int i = 0; i < _sortedCategories.Count; i++)
                 {
-                    if (!grouped.TryGetValue(config.Category, out var list))
-                    {
-                        list = new List<ConfigAsset>();
-                        grouped[config.Category] = list;
-                    }
-                    list.Add(config);
-                }
-
-                var sortedCategories = new List<ConfigCategory>(grouped.Keys);
-                sortedCategories.Sort((a, b) => ((int)a).CompareTo((int)b));
-
-                foreach (var category in sortedCategories)
-                {
-                    DrawCategoryGroup(category, grouped[category]);
+                    var category = _sortedCategories[i];
+                    DrawCategoryGroup(category, _groupedConfigs[category]);
                 }
             }
 
@@ -478,11 +500,10 @@ namespace Strada.Core.Editor.Windows
             if (_categoryFoldouts[category])
             {
                 EditorGUI.indentLevel++;
-                var sortedConfigs = new List<ConfigAsset>(configs);
-                sortedConfigs.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
-                foreach (var config in sortedConfigs)
+                // Already sorted by EnsureFilteredConfigs.
+                for (int i = 0; i < configs.Count; i++)
                 {
-                    DrawConfigItem(config);
+                    DrawConfigItem(configs[i]);
                 }
                 EditorGUI.indentLevel--;
             }
@@ -606,6 +627,41 @@ namespace Strada.Core.Editor.Windows
         public void RefreshConfigList()
         {
             _cachedConfigs = DiscoverConfigs();
+            _configsVersion++;
+
+            PruneStaleState();
+        }
+
+        /// <summary>
+        /// Drops selection and validation entries whose asset is no longer part of the config
+        /// set. ConfigAsset compares by underlying asset, so entries for assets that still
+        /// exist survive the refresh; only genuinely gone ones are removed.
+        /// </summary>
+        private void PruneStaleState()
+        {
+            if (_selectedConfigs.Count == 0 && _validationResults.Count == 0) return;
+
+            var live = new HashSet<ConfigAsset>(_cachedConfigs);
+
+            _selectedConfigs.RemoveWhere(c => !live.Contains(c));
+
+            if (_validationResults.Count > 0)
+            {
+                var stale = new List<ConfigAsset>();
+                foreach (var kvp in _validationResults)
+                {
+                    if (!live.Contains(kvp.Key))
+                        stale.Add(kvp.Key);
+                }
+
+                for (int i = 0; i < stale.Count; i++)
+                {
+                    _validationResults.Remove(stale[i]);
+                }
+            }
+
+            if (_selectedConfigs.Count == 0)
+                _selectAll = false;
         }
 
         /// <summary>
@@ -646,9 +702,59 @@ namespace Strada.Core.Editor.Windows
         /// <summary>
         /// Gets the filtered list of configs based on current search and category filters.
         /// </summary>
+        /// <remarks>
+        /// The returned list is cached and reused until the filters or the config set change;
+        /// callers must treat it as read-only.
+        /// </remarks>
         public List<ConfigAsset> GetFilteredConfigs()
         {
-            return FilterConfigs(_cachedConfigs, _searchFilter, _typeFilter, _selectedCategory);
+            EnsureFilteredConfigs();
+            return _filteredConfigs;
+        }
+
+        /// <summary>
+        /// Rebuilds the filtered list and its per-category grouping only when something they
+        /// depend on has changed.
+        /// </summary>
+        private void EnsureFilteredConfigs()
+        {
+            if (_filteredConfigs != null &&
+                _filterVersion == _configsVersion &&
+                _filterCategorySnapshot == _selectedCategory &&
+                string.Equals(_filterNameSnapshot, _searchFilter, StringComparison.Ordinal) &&
+                string.Equals(_filterTypeSnapshot, _typeFilter, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _filteredConfigs = FilterConfigs(_cachedConfigs, _searchFilter, _typeFilter, _selectedCategory);
+            _filterVersion = _configsVersion;
+            _filterCategorySnapshot = _selectedCategory;
+            _filterNameSnapshot = _searchFilter;
+            _filterTypeSnapshot = _typeFilter;
+
+            _groupedConfigs.Clear();
+            for (int i = 0; i < _filteredConfigs.Count; i++)
+            {
+                var config = _filteredConfigs[i];
+                if (!_groupedConfigs.TryGetValue(config.Category, out var list))
+                {
+                    list = new List<ConfigAsset>();
+                    _groupedConfigs[config.Category] = list;
+                }
+                list.Add(config);
+            }
+
+            // Sorting here rather than in DrawCategoryGroup means the per-category copy and
+            // sort happen once per filter change instead of once per repaint.
+            foreach (var kvp in _groupedConfigs)
+            {
+                kvp.Value.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+            }
+
+            _sortedCategories.Clear();
+            _sortedCategories.AddRange(_groupedConfigs.Keys);
+            _sortedCategories.Sort((a, b) => ((int)a).CompareTo((int)b));
         }
 
         /// <summary>

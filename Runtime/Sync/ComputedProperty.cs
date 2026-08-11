@@ -6,15 +6,22 @@ using System.Runtime.CompilerServices;
 
 namespace Strada.Core.Sync
 {
-    public sealed class ComputedProperty<T> : IReadOnlyReactiveProperty<T>, IDisposable
+    public sealed class ComputedProperty<T> : IReadOnlyReactiveProperty<T>, IUntypedReactiveProperty, IDisposable
     {
         private static readonly ConcurrentDictionary<Type, MethodInfo> s_subscribeMethodCache = new();
         private static readonly ConcurrentDictionary<Type, MethodInfo> s_invalidateMethodCache = new();
         private static readonly MethodInfo s_invalidateIgnoreParamMethod = typeof(ComputedProperty<T>)
             .GetMethod("InvalidateIgnoreParam", BindingFlags.NonPublic | BindingFlags.Instance);
 
+        // Built once per closed generic so the notify guard can name the offending property
+        // without formatting anything on the hot path.
+        private static readonly string s_diagnosticName = "ComputedProperty<" + typeof(T).Name + ">";
+
         private readonly Func<T> _computation;
-        private readonly List<Action<T>> _handlers = new(4);
+        // Copy-on-write, as in ReactiveProperty<T>: notification reads an array that can no
+        // longer change under it. Indexing a live List while invoking arbitrary handlers
+        // skipped the next handler whenever one unsubscribed itself from inside the callback.
+        private Action<T>[] _handlers = Array.Empty<Action<T>>();
         private readonly List<IDisposable> _subscriptions = new(4);
         private T _cachedValue;
         private bool _isDirty = true;
@@ -144,6 +151,18 @@ namespace Strada.Core.Sync
 
         private void WatchUntypedDependency(object dependency)
         {
+            if (dependency == null)
+                throw new ArgumentNullException(nameof(dependency),
+                    "FromMany was given a null dependency; every element of the dependency array must be a reactive property.");
+
+            // Static path: no reflection at all. Every reactive property in the framework
+            // implements IUntypedReactiveProperty precisely so this call stays AOT-safe.
+            if (dependency is IUntypedReactiveProperty untyped)
+            {
+                _subscriptions.Add(untyped.SubscribeUntyped(Invalidate));
+                return;
+            }
+
             var type = dependency.GetType();
             var interfaces = type.GetInterfaces();
 
@@ -153,14 +172,15 @@ namespace Strada.Core.Sync
                 {
                     var depType = iface.GetGenericArguments()[0];
 
-                    // Resolve the interface Subscribe(Action<TDep>) method which returns SubscriptionToken.
+                    // Reflective fallback for third-party IReadOnlyReactiveProperty<> types that
+                    // do not implement IUntypedReactiveProperty. MakeGenericMethod on a value-type
+                    // argument needs a closed instantiation IL2CPP cannot see, so this path can
+                    // throw ExecutionEngineException on AOT players — see AotHints below.
                     var subscribeMethod = s_subscribeMethodCache.GetOrAdd(iface, i => i.GetMethod("Subscribe"));
 
-                    // Get or cache the generic InvalidateIgnoreParam method
                     var invalidateMethod = s_invalidateMethodCache.GetOrAdd(depType,
                         dt => s_invalidateIgnoreParamMethod.MakeGenericMethod(dt));
 
-                    // Create handler delegate
                     var handlerType = typeof(Action<>).MakeGenericType(depType);
                     var handler = Delegate.CreateDelegate(handlerType, this, invalidateMethod);
 
@@ -169,9 +189,42 @@ namespace Strada.Core.Sync
                     return;
                 }
             }
+
+            // Falling off the end used to return silently, producing a computed property that
+            // compiled fine and then never updated for the rest of its life.
+            throw new ArgumentException(
+                $"FromMany dependency of type {type.Name} does not implement IReadOnlyReactiveProperty<>; it cannot be watched.",
+                nameof(dependency));
         }
 
+        // Reached only through Delegate.CreateDelegate, so Unity's managed-code stripping
+        // (Medium by default on IL2CPP) would otherwise remove it and leave the cached
+        // MethodInfo null.
+        [UnityEngine.Scripting.Preserve]
         private void InvalidateIgnoreParam<TIgnored>(TIgnored _) => Invalidate();
+
+        /// <summary>
+        /// Never called. It exists so IL2CPP generates the closed
+        /// <c>InvalidateIgnoreParam&lt;T&gt;</c> instantiations for the common value types the
+        /// reflective fallback in <see cref="WatchUntypedDependency"/> needs; AOT cannot create
+        /// them on demand.
+        /// </summary>
+        [UnityEngine.Scripting.Preserve]
+        private static void AotHints(ComputedProperty<T> instance)
+        {
+            instance.InvalidateIgnoreParam<int>(default);
+            instance.InvalidateIgnoreParam<long>(default);
+            instance.InvalidateIgnoreParam<float>(default);
+            instance.InvalidateIgnoreParam<double>(default);
+            instance.InvalidateIgnoreParam<bool>(default);
+            instance.InvalidateIgnoreParam<byte>(default);
+            instance.InvalidateIgnoreParam<UnityEngine.Vector2>(default);
+            instance.InvalidateIgnoreParam<UnityEngine.Vector3>(default);
+            instance.InvalidateIgnoreParam<UnityEngine.Vector4>(default);
+            instance.InvalidateIgnoreParam<UnityEngine.Quaternion>(default);
+            instance.InvalidateIgnoreParam<UnityEngine.Color>(default);
+            instance.InvalidateIgnoreParam<object>(default);
+        }
 
         private void WatchDependency<TDep>(IReadOnlyReactiveProperty<TDep> dependency)
         {
@@ -186,30 +239,78 @@ namespace Strada.Core.Sync
         {
             var oldValue = _cachedValue;
             _isDirty = true;
-            var newValue = Value;
 
-            if (!EqualityComparer<T>.Default.Equals(oldValue, newValue))
+            // Nobody is listening, so leave the value dirty and let the next read of Value pay
+            // for the recomputation. Reading Value back here defeated the lazy cache entirely:
+            // a chain of N computed properties ran N full computations per dependency change
+            // even when the result was never observed.
+            var snapshot = _handlers;
+            if (snapshot.Length == 0) return;
+
+            var newValue = Value;
+            if (EqualityComparer<T>.Default.Equals(oldValue, newValue)) return;
+
+            // Handlers may write back into the graph, so the same cycle hazard as
+            // ReactiveProperty.Notify applies here — and, as there, the guard is carried only
+            // in Editor and Development builds so a shipped player does not pay a
+            // thread-static read and an inlining-blocking try/finally per notification.
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (!ReactiveNotifyGuard.TryEnter())
             {
-                for (int i = 0; i < _handlers.Count; i++)
-                    _handlers[i](newValue);
+                ReactiveNotifyGuard.ReportOverflow(s_diagnosticName);
+                return;
             }
+            try
+            {
+#endif
+                for (int i = 0; i < snapshot.Length; i++)
+                    snapshot[i](newValue);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            }
+            finally
+            {
+                ReactiveNotifyGuard.Exit();
+            }
+#endif
         }
 
         public Strada.Core.SubscriptionToken Subscribe(Action<T> handler)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
-            _handlers.Add(handler);
-            return new Strada.Core.SubscriptionToken(() =>
+            var current = _handlers;
+            var grown = new Action<T>[current.Length + 1];
+            Array.Copy(current, grown, current.Length);
+            grown[current.Length] = handler;
+            _handlers = grown;
+            return new Strada.Core.SubscriptionToken(() => Unsubscribe(handler));
+        }
+
+        /// <inheritdoc />
+        public IDisposable SubscribeUntyped(Action onChanged)
+        {
+            if (onChanged == null) throw new ArgumentNullException(nameof(onChanged));
+            return Subscribe(_ => onChanged());
+        }
+
+        private void Unsubscribe(Action<T> handler)
+        {
+            var current = _handlers;
+            for (int i = current.Length - 1; i >= 0; i--)
             {
-                for (int i = _handlers.Count - 1; i >= 0; i--)
+                if (!ReferenceEquals(current[i], handler)) continue;
+
+                if (current.Length == 1)
                 {
-                    if (ReferenceEquals(_handlers[i], handler))
-                    {
-                        _handlers.RemoveAt(i);
-                        break;
-                    }
+                    _handlers = Array.Empty<Action<T>>();
+                    return;
                 }
-            });
+
+                var shrunk = new Action<T>[current.Length - 1];
+                Array.Copy(current, 0, shrunk, 0, i);
+                Array.Copy(current, i + 1, shrunk, i, current.Length - i - 1);
+                _handlers = shrunk;
+                return;
+            }
         }
 
         public void Dispose()
@@ -221,7 +322,7 @@ namespace Strada.Core.Sync
                 sub.Dispose();
 
             _subscriptions.Clear();
-            _handlers.Clear();
+            _handlers = Array.Empty<Action<T>>();
         }
 
     }

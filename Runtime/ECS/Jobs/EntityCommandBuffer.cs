@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Strada.Core.ECS.Core;
-using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 
@@ -23,18 +22,23 @@ namespace Strada.Core.ECS.Jobs
     /// </summary>
     /// <remarks>
     /// <para><b>Thread safety:</b> <see cref="EntityCommandBuffer"/> is <b>not thread-safe</b>.
-    /// Each instance is intended to be used by a single thread (or a single Burst job at a time).
-    /// To record commands from multiple worker threads concurrently, create one buffer per
-    /// worker and merge them at playback time, or wait for the planned <c>AsParallelWriter()</c>
-    /// API. Concurrent writes from multiple threads to the same buffer will corrupt the
-    /// internal command stream and cause undefined behavior during playback.</para>
+    /// Each instance is intended to be used by a single thread at a time. To record commands from
+    /// multiple worker threads concurrently, create one buffer per worker and merge them at
+    /// playback time, or wait for the planned <c>AsParallelWriter()</c> API. Concurrent writes
+    /// from multiple threads to the same buffer will corrupt the internal command stream and
+    /// cause undefined behavior during playback.</para>
+    /// <para><b>Burst:</b> neither half of this type is Burst-compatible, and the type-level
+    /// <c>[BurstCompile]</c> it used to carry produced no code — Burst only compiles job types
+    /// and static methods explicitly marked inside a <c>[BurstCompile]</c> type. The record path
+    /// calls <see cref="ComponentPlayback.EnsureHandler{T}"/>, which touches a managed dictionary
+    /// and a managed generic static; playback additionally does interface dispatch and throws.
+    /// Record and play back from managed code.</para>
     /// <para><b>Playback:</b> <see cref="Playback"/> must run on the main thread; it mutates
     /// <see cref="Strada.Core.ECS.Core.EntityManager"/> state which is itself not thread-safe.</para>
     /// <para><b>Disposal:</b> The buffer owns native memory and must be disposed. Allocator
     /// determines lifetime (e.g. <see cref="Unity.Collections.Allocator.TempJob"/> requires
     /// disposal within 4 frames).</para>
     /// </remarks>
-    [BurstCompile]
     public unsafe struct EntityCommandBuffer : IDisposable
     {
         private NativeList<byte> _commandStream;
@@ -123,8 +127,6 @@ namespace Strada.Core.ECS.Jobs
             if (_commandStream.Length == 0) return;
 
             _createdEntities.Clear();
-            for (int i = 0; i < _createEntityCount; i++)
-                _createdEntities.Add(entityManager.CreateEntity());
 
             var reader = new CommandReader(_commandStream.AsArray());
             while (reader.HasRemaining)
@@ -133,6 +135,15 @@ namespace Strada.Core.ECS.Jobs
                 switch (cmd)
                 {
                     case EntityOperation.CreateEntity:
+                        // Created here, in recorded order, rather than all up front. Hoisting
+                        // every create ahead of the stream meant a DestroyEntity recorded
+                        // between two creates always executed after both, so an index freed
+                        // inside a buffer could never be recycled by a later create in the same
+                        // buffer — a create/destroy-balanced workload consumed twice the entity
+                        // index space it needed. The deferred index handed to the recorder is
+                        // the ordinal of its CreateEntity command, so appending in stream order
+                        // keeps _createdEntities indexed exactly as recorded.
+                        _createdEntities.Add(entityManager.CreateEntity());
                         break;
                     case EntityOperation.DestroyEntity:
                         PlaybackDestroyEntity(ref reader, entityManager);
@@ -186,13 +197,16 @@ namespace Strada.Core.ECS.Jobs
             WriteByte(1);
         }
 
+        // Every field below is appended with a single AddRange memcpy rather than one Add per
+        // byte. NativeList<T>.Add is not free: under ENABLE_UNITY_COLLECTIONS_CHECKS (the Editor
+        // and every development build) it runs an AtomicSafetyHandle check and a capacity branch
+        // per call, so recording one AddComponent<Position> cost 34 safety checks to move 34
+        // bytes. AddRange pays that once.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteTypeHash<T>() where T : unmanaged
         {
             ulong hash = TypeHash<T>.Value;
-            var bytes = (byte*)&hash;
-            for (int i = 0; i < 8; i++)
-                _commandStream.Add(bytes[i]);
+            _commandStream.AddRange(&hash, sizeof(ulong));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -200,19 +214,13 @@ namespace Strada.Core.ECS.Jobs
         {
             int size = sizeof(T);
             WriteInt(size);
-            var ptr = (byte*)&component;
-            for (int i = 0; i < size; i++)
-                _commandStream.Add(ptr[i]);
+            _commandStream.AddRange(&component, size);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteInt(int value)
         {
-            var bytes = (byte*)&value;
-            _commandStream.Add(bytes[0]);
-            _commandStream.Add(bytes[1]);
-            _commandStream.Add(bytes[2]);
-            _commandStream.Add(bytes[3]);
+            _commandStream.AddRange(&value, sizeof(int));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -327,7 +335,12 @@ namespace Strada.Core.ECS.Jobs
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public unsafe byte* ReadBytes(int count)
             {
-                if (_position + count > _data.Length)
+                // count is decoded from the stream, so it is corruption-influenced. The old
+                // "_position + count > _data.Length" form was unsound in both directions: the
+                // sum wraps negative for a count near int.MaxValue and passes the guard, and a
+                // negative count passes trivially and then rewinds _position. Comparing against
+                // Remaining, as the scalar readers do, cannot overflow.
+                if (count < 0 || count > Remaining)
                     throw new InvalidOperationException("Command buffer read overflow");
 
                 byte* result = (byte*)_data.GetUnsafeReadOnlyPtr() + _position;
@@ -401,18 +414,38 @@ namespace Strada.Core.ECS.Jobs
                 "The command was discarded. Call ComponentPlayback.EnsureHandler<T>() for this component type.");
         }
 
+        /// <summary>
+        /// Per-closed-generic marker recording that <typeparamref name="T"/>'s playback handler
+        /// is already in <c>_handlers</c>.
+        /// </summary>
+        /// <remarks>
+        /// EnsureHandler runs once per recorded command, so without this every AddComponent /
+        /// SetComponent / RemoveComponent call paid a ConcurrentDictionary hash-and-probe just to
+        /// confirm a registration that cannot be undone. A static field on a closed generic is a
+        /// plain load. The write is idempotent, so a race between two threads recording the same
+        /// component type is benign.
+        /// </remarks>
+        private static class HandlerCache<T> where T : unmanaged, IComponent
+        {
+            internal static bool Registered;
+        }
+
         public static void EnsureHandler<T>() where T : unmanaged, IComponent
         {
+            if (HandlerCache<T>.Registered) return;
+
             ulong hash = TypeHash<T>.Value;
             if (_handlers.TryGetValue(hash, out var existing))
             {
                 if (existing is not ComponentPlaybackHandler<T>)
                     throw new InvalidOperationException(
                         $"TypeHash collision detected for {typeof(T).Name}: hash {hash} is already registered for {existing.GetType().Name}");
+                HandlerCache<T>.Registered = true;
                 return;
             }
 
             _handlers.TryAdd(hash, new ComponentPlaybackHandler<T>());
+            HandlerCache<T>.Registered = true;
         }
     }
 
@@ -428,7 +461,12 @@ namespace Strada.Core.ECS.Jobs
         public unsafe void AddComponent(EntityManager em, Entity entity, byte* data, int size)
         {
             CheckComponentSize(size);
-            T component = *(T*)data;
+            // Copied rather than dereferenced as T*: the payload sits at whatever byte offset the
+            // variable-length command stream reached (22 bytes past the start of its own command,
+            // with no padding anywhere), so its alignment is arbitrary. A typed load at a
+            // misaligned address is undefined in ECMA-335 and faults on ARM32 IL2CPP or on any
+            // platform once a component holds a 16-byte-aligned SIMD field.
+            UnsafeUtility.CopyPtrToStructure(data, out T component);
             em.AddComponent(entity, component);
         }
 
@@ -440,7 +478,8 @@ namespace Strada.Core.ECS.Jobs
         public unsafe void SetComponent(EntityManager em, Entity entity, byte* data, int size)
         {
             CheckComponentSize(size);
-            T component = *(T*)data;
+            // See AddComponent: the stream payload is not guaranteed to be aligned for T.
+            UnsafeUtility.CopyPtrToStructure(data, out T component);
             em.SetComponent(entity, component);
         }
 

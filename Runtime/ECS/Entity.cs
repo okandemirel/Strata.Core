@@ -8,7 +8,19 @@ namespace Strada.Core.ECS
     /// 64-bit value: 32-bit index + 32-bit version for safety.
     /// Designed to be Burst-compatible.
     /// </summary>
-    [Serializable]
+    /// <remarks>
+    /// <para><b>Runtime-only. Entity handles must not be persisted.</b> The value is meaningful
+    /// only against the <see cref="Strada.Core.ECS.Core.EntityManager"/> instance that issued it,
+    /// and both fields are <c>readonly</c> — which Unity's serializer skips, along with
+    /// <c>static</c> and <c>const</c>. A <c>[Serializable]</c> attribute was therefore advertising
+    /// a capability the type does not have: an Entity field on a MonoBehaviour or ScriptableObject
+    /// wrote nothing and read back as <c>(0, 0)</c>, i.e. <see cref="Null"/>, which
+    /// <c>EntityManager.Exists</c> rejects. The failure surfaced as "my entity reference is gone
+    /// after a domain reload" rather than as a serialization error, so the attribute was removed.</para>
+    /// <para>To persist world state across a domain reload or a save, use
+    /// <c>EntityManager.CaptureState</c> / <c>EntityManager.RestoreState</c>, which round-trip the
+    /// index and version arrays together.</para>
+    /// </remarks>
     [StructLayout(LayoutKind.Sequential)]
     public readonly struct Entity : IEquatable<Entity>
     {

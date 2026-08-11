@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using Strada.Core.Editor.DataProviders;
 using Strada.Core.Editor.DataProviders.Models;
 using UnityEditor;
@@ -54,10 +53,12 @@ namespace Strada.Core.Editor.Windows
         private HashSet<string> _breakpoints = new HashSet<string>();
         private bool _showBreakpointManager;
 
-        // Bookmarks
-        private HashSet<int> _bookmarkedIndices = new HashSet<int>();
+        // Bookmarks. Keyed on the entry reference: the provider hands back the same
+        // MessageLogEntry instances on every refresh, so identity survives a refresh where a
+        // list index would not.
         private bool _showBookmarkedOnly;
         private Dictionary<MessageLogEntry, bool> _bookmarkedEntries = new Dictionary<MessageLogEntry, bool>();
+        private readonly List<MessageLogEntry> _staleBookmarks = new List<MessageLogEntry>();
 
         // Statistics
         private Vector2 _statisticsScrollPosition;
@@ -145,7 +146,6 @@ namespace Strada.Core.Editor.Windows
                 _displayedEntries.Clear();
                 _selectedMessageIndex = -1;
                 _bookmarkedEntries.Clear();
-                _bookmarkedIndices.Clear();
             }
             else if (state == PlayModeStateChange.ExitingPlayMode)
             {
@@ -153,7 +153,6 @@ namespace Strada.Core.Editor.Windows
                 _selectedMessageIndex = -1;
                 _isPaused = false;
                 _bookmarkedEntries.Clear();
-                _bookmarkedIndices.Clear();
             }
             Repaint();
         }
@@ -1395,7 +1394,7 @@ namespace Strada.Core.Editor.Windows
         /// </summary>
         private bool IsBookmarked(MessageLogEntry entry)
         {
-            return _bookmarkedEntries.ContainsKey(entry) && _bookmarkedEntries[entry];
+            return _bookmarkedEntries.TryGetValue(entry, out var bookmarked) && bookmarked;
         }
 
         /// <summary>
@@ -1403,15 +1402,16 @@ namespace Strada.Core.Editor.Windows
         /// </summary>
         private void ToggleBookmark(int index, MessageLogEntry entry)
         {
-            if (_bookmarkedEntries.ContainsKey(entry) && _bookmarkedEntries[entry])
+            // Un-bookmarking removes the key rather than storing false: the key holds the
+            // entry and its boxed payload alive, and a false entry is indistinguishable from
+            // an absent one everywhere else.
+            if (_bookmarkedEntries.ContainsKey(entry))
             {
-                _bookmarkedEntries[entry] = false;
-                _bookmarkedIndices.Remove(index);
+                _bookmarkedEntries.Remove(entry);
             }
             else
             {
                 _bookmarkedEntries[entry] = true;
-                _bookmarkedIndices.Add(index);
             }
         }
 
@@ -1426,6 +1426,41 @@ namespace Strada.Core.Editor.Windows
         {
             var filter = BuildMessageFilter();
             _busDataProvider.GetLogEntriesNonAlloc(_displayedEntries, filter);
+            PruneEvictedBookmarks();
+        }
+
+        /// <summary>
+        /// Drops bookmarks whose entry the provider has already evicted from its ring buffer.
+        /// Without this every bookmark keeps a MessageLogEntry — and the boxed message payload
+        /// it points at — alive for the lifetime of the window.
+        /// </summary>
+        private void PruneEvictedBookmarks()
+        {
+            if (_bookmarkedEntries.Count == 0 || _displayedEntries.Count == 0) return;
+
+            // Only safe while the displayed list is the whole log. With a filter applied the
+            // missing entries are merely hidden, and pruning would silently discard bookmarks.
+            if (!string.IsNullOrEmpty(_typeFilterPattern) || _kindFilter.HasValue) return;
+
+            // The provider only ever trims from the front, so anything older than the oldest
+            // surviving entry is gone for good.
+            var oldestRetained = _displayedEntries[0].Timestamp;
+
+            _staleBookmarks.Clear();
+            foreach (var kvp in _bookmarkedEntries)
+            {
+                if (kvp.Key.Timestamp < oldestRetained)
+                {
+                    _staleBookmarks.Add(kvp.Key);
+                }
+            }
+
+            for (int i = 0; i < _staleBookmarks.Count; i++)
+            {
+                _bookmarkedEntries.Remove(_staleBookmarks[i]);
+            }
+
+            _staleBookmarks.Clear();
         }
 
         /// <summary>
@@ -1445,27 +1480,18 @@ namespace Strada.Core.Editor.Windows
         /// Checks if a message type matches the filter pattern.
         /// Supports wildcards (* for any characters) and partial matches.
         /// </summary>
+        /// <remarks>
+        /// Forwards to <see cref="BusDataProvider.MatchesTypePattern"/>, which is what the
+        /// window's filter actually runs through. This used to be a second implementation
+        /// that anchored every pattern as an exact match, so it disagreed with the shipped
+        /// path for patterns without wildcards.
+        /// </remarks>
         /// <param name="typeName">The type name to check.</param>
         /// <param name="pattern">The filter pattern.</param>
         /// <returns>True if the type matches the pattern.</returns>
         internal static bool MatchesTypePattern(string typeName, string pattern)
         {
-            if (string.IsNullOrEmpty(pattern)) return true;
-            if (string.IsNullOrEmpty(typeName)) return false;
-
-            var regexPattern = "^" + Regex.Escape(pattern)
-                .Replace("\\*", ".*")
-                .Replace("\\?", ".") + "$";
-
-            try
-            {
-                return Regex.IsMatch(typeName, regexPattern, RegexOptions.IgnoreCase,
-                    TimeSpan.FromMilliseconds(100));
-            }
-            catch
-            {
-                return typeName.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
-            }
+            return BusDataProvider.MatchesTypePattern(typeName, pattern);
         }
 
         /// <summary>
@@ -1477,7 +1503,6 @@ namespace Strada.Core.Editor.Windows
             _displayedEntries.Clear();
             _selectedMessageIndex = -1;
             _bookmarkedEntries.Clear();
-            _bookmarkedIndices.Clear();
             Repaint();
         }
 

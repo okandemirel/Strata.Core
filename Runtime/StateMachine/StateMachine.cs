@@ -25,6 +25,19 @@ namespace Strada.Core.StateMachine
         {
             OnStateAdded(state);
             States[typeof(T)] = state;
+
+            // typeof(T) is the type written at the call site, not the type of the instance. When
+            // states are added through a base-typed variable — a factory return, a foreach over a
+            // List<TState>, a helper with a base-typed parameter — every registration collapses
+            // onto that one key and silently overwrites the previous state, leaving
+            // SetState<Concrete>() with nothing to find. Index by the runtime type as well so
+            // concrete lookups always resolve.
+            if (state != null)
+            {
+                var runtimeType = state.GetType();
+                if (runtimeType != typeof(T))
+                    States[runtimeType] = state;
+            }
         }
 
         protected virtual void OnStateAdded(TState state) { }
@@ -60,7 +73,15 @@ namespace Strada.Core.StateMachine
             if (CurrentStateInternal == null || IsTransitioningInternal) return;
 
             CheckTransitions();
-            CurrentStateInternal.OnUpdate(deltaTime);
+
+            // The guard above ran before the transition pass. CheckTransitions can enter a new
+            // state, and OnExit/OnEnter/OnStateChanged are all free to call Stop(), which nulls
+            // CurrentStateInternal — dereferencing it again here would throw on the frame a
+            // terminal state is entered. IsTransitioningInternal is already cleared by then.
+            var state = CurrentStateInternal;
+            if (state == null) return;
+
+            state.OnUpdate(deltaTime);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -108,7 +129,7 @@ namespace Strada.Core.StateMachine
         {
             foreach (var transition in AnyTransitions)
             {
-                if (transition.ToType != CurrentStateTypeInternal && transition.Condition())
+                if (transition.ToType != CurrentStateTypeInternal && Evaluate(transition))
                 {
                     SetState(transition.ToType);
                     return;
@@ -119,12 +140,40 @@ namespace Strada.Core.StateMachine
             {
                 foreach (var transition in stateTransitions)
                 {
-                    if (transition.Condition())
+                    if (Evaluate(transition))
                     {
                         SetState(transition.ToType);
                         return;
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Evaluates a transition condition, treating a throwing condition as "not taken".
+        /// </summary>
+        /// <remarks>
+        /// Conditions are arbitrary user delegates and nothing above this call wraps them: the
+        /// machine is driven directly by caller code, not by PatternManager or the PlayerLoop.
+        /// An escaping exception therefore aborted Update before the current state's OnUpdate
+        /// ran, so the state machine stalled for as long as the fault persisted.
+        /// </remarks>
+        private bool Evaluate(in Transition<TState> transition)
+        {
+            var condition = transition.Condition;
+            if (condition == null) return false;
+
+            try
+            {
+                return condition();
+            }
+            catch (Exception ex)
+            {
+                var from = CurrentStateTypeInternal != null ? CurrentStateTypeInternal.Name : "<none>";
+                var to = transition.ToType != null ? transition.ToType.Name : "<null>";
+                Debug.LogError($"Transition condition {from} -> {to} threw; treating it as false.");
+                Debug.LogException(ex);
+                return false;
             }
         }
     }

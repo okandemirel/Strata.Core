@@ -27,7 +27,14 @@ namespace Strada.Core.Modules
                     _resolveAttempted = true;
                     _cachedType = Type.GetType(_assemblyQualifiedName);
                     if (_cachedType == null)
-                        Debug.LogWarning($"[SerializableType] Failed to resolve type: {_assemblyQualifiedName}");
+                    {
+                        // A failed resolve silently drops the configured system/service: the entry
+                        // becomes invalid, the runner skips it, and the bootstrap still reports
+                        // success. The usual cause is IL2CPP managed-code stripping removing a type
+                        // whose only reference is this serialized string, which never reproduces in
+                        // the Editor — so this has to be an error, not a warning.
+                        Debug.LogError($"[SerializableType] Failed to resolve type: {_assemblyQualifiedName}");
+                    }
                 }
                 return _cachedType;
             }
@@ -53,14 +60,27 @@ namespace Strada.Core.Modules
         /// expects a specific base type or interface (defense-in-depth against tampered assets
         /// or asset bundles that may carry an arbitrary assembly-qualified name).
         /// </remarks>
-        public Type AsType<TBase>() where TBase : class
+        public Type AsType<TBase>() where TBase : class => AsType(typeof(TBase));
+
+        /// <summary>
+        /// Resolves the type and returns it only if it is assignable to <paramref name="expectedBase"/>.
+        /// Returns <c>null</c> and logs an error otherwise.
+        /// </summary>
+        /// <remarks>
+        /// Non-generic counterpart of <see cref="AsType{TBase}"/>, for call sites where the
+        /// expected base type is itself only known at runtime (for example a service interface
+        /// that was also configured in the Inspector).
+        /// </remarks>
+        public Type AsType(Type expectedBase)
         {
+            if (expectedBase == null) throw new ArgumentNullException(nameof(expectedBase));
+
             var resolved = Type;
             if (resolved == null) return null;
-            if (!typeof(TBase).IsAssignableFrom(resolved))
+            if (!expectedBase.IsAssignableFrom(resolved))
             {
                 Debug.LogError(
-                    $"[SerializableType] Type '{resolved.FullName}' is not assignable to {typeof(TBase).FullName}; rejected.");
+                    $"[SerializableType] Type '{resolved.FullName}' is not assignable to {expectedBase.FullName}; rejected.");
                 return null;
             }
             return resolved;

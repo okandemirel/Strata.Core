@@ -256,6 +256,12 @@ namespace Strada.Core.Editor.Windows
         private double _lastRepaintTime;
         private bool _needsRepaint;
 
+        // Compiled once per distinct (pattern, regex-mode) pair; recompiling per entry on a
+        // live log stream is far more expensive than the match itself.
+        private System.Text.RegularExpressions.Regex _searchRegex;
+        private string _searchRegexPattern;
+        private bool _searchRegexInvalid;
+
         private static readonly Color InfoRowColor = new Color(0.22f, 0.22f, 0.22f, 0.0f);
         private static readonly Color InfoRowAltColor = new Color(0.25f, 0.25f, 0.25f, 0.3f);
         private static readonly Color WarningRowColor = new Color(0.6f, 0.5f, 0.2f, 0.15f);
@@ -1158,36 +1164,8 @@ namespace Strada.Core.Editor.Windows
             {
                 var entry = _allEntries[i];
 
-                if (!_enabledModules.Contains(entry.Module))
+                if (!PassesFilter(entry))
                     continue;
-
-                if (!_enabledTypes.Contains(entry.Type))
-                    continue;
-
-                if (entry.IsDeepLog && !_showDeepLogs)
-                    continue;
-
-                if (!string.IsNullOrEmpty(_searchText))
-                {
-                    bool matches;
-                    if (_regexSearch)
-                    {
-                        try
-                        {
-                            matches = System.Text.RegularExpressions.Regex.IsMatch(entry.Message, _searchText, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                        }
-                        catch
-                        {
-                            matches = false;
-                        }
-                    }
-                    else
-                    {
-                        matches = entry.Message.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
-                    }
-
-                    if (!matches) continue;
-                }
 
                 _filteredEntries.Add(entry);
             }
@@ -1200,6 +1178,71 @@ namespace Strada.Core.Editor.Windows
             }
 
             Repaint();
+        }
+
+        /// <summary>
+        /// Single definition of "this entry is visible under the current filters".
+        /// Both the full refilter and the incremental path for newly arriving entries go
+        /// through here; when they had separate copies the incremental one ignored regex
+        /// mode entirely, so with Regex Search on no live log line was ever displayed.
+        /// </summary>
+        private bool PassesFilter(LogEntry entry)
+        {
+            if (!_enabledModules.Contains(entry.Module))
+                return false;
+
+            if (!_enabledTypes.Contains(entry.Type))
+                return false;
+
+            if (entry.IsDeepLog && !_showDeepLogs)
+                return false;
+
+            if (string.IsNullOrEmpty(_searchText))
+                return true;
+
+            if (!_regexSearch)
+                return entry.Message.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
+
+            var regex = GetSearchRegex();
+            if (regex == null)
+                return false;
+
+            try
+            {
+                return regex.IsMatch(entry.Message);
+            }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            {
+                // A pathological pattern must not stall the editor; treat it as no match.
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Returns the compiled search regex, rebuilding it only when the pattern changes.
+        /// Returns null while the pattern is not valid.
+        /// </summary>
+        private System.Text.RegularExpressions.Regex GetSearchRegex()
+        {
+            if (_searchRegexPattern != _searchText)
+            {
+                _searchRegexPattern = _searchText;
+                _searchRegexInvalid = false;
+                try
+                {
+                    _searchRegex = new System.Text.RegularExpressions.Regex(
+                        _searchText,
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                        TimeSpan.FromMilliseconds(100));
+                }
+                catch (ArgumentException)
+                {
+                    _searchRegex = null;
+                    _searchRegexInvalid = true;
+                }
+            }
+
+            return _searchRegexInvalid ? null : _searchRegex;
         }
 
         private void UpdateCounts()
@@ -1250,22 +1293,56 @@ namespace Strada.Core.Editor.Windows
             if (entry.IsDeepLog)
                 _deepLogCount++;
 
-            bool passesFilter = _enabledModules.Contains(entry.Module)
-                && _enabledTypes.Contains(entry.Type)
-                && (!entry.IsDeepLog || _showDeepLogs);
-
-            if (passesFilter && string.IsNullOrEmpty(_searchText))
+            if (PassesFilter(entry))
             {
                 _filteredEntries.Add(entry);
             }
-            else if (passesFilter && !string.IsNullOrEmpty(_searchText))
-            {
-                bool matches = entry.Message.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
-                if (matches)
-                    _filteredEntries.Add(entry);
-            }
+
+            TrimToMaxEntries();
 
             _needsRepaint = true;
+        }
+
+        /// <summary>
+        /// Drops the oldest entries once the window holds more than the provider does.
+        /// The provider evicts from its own list, but this window works on a copy taken at
+        /// OnEnable and only ever appended to, so without this it grows without bound for
+        /// the whole session.
+        /// </summary>
+        private void TrimToMaxEntries()
+        {
+            var maxEntries = StradaLogSettings.Instance.MaxLogEntries;
+            if (maxEntries <= 0 || _allEntries.Count <= maxEntries)
+                return;
+
+            int excess = _allEntries.Count - maxEntries;
+
+            // _filteredEntries is an ordered subset of _allEntries, so anything evicted from
+            // the head of one is at the head of the other if it is there at all.
+            int filteredRemoved = 0;
+            for (int i = 0; i < excess; i++)
+            {
+                var evicted = _allEntries[i];
+                if (filteredRemoved < _filteredEntries.Count &&
+                    ReferenceEquals(_filteredEntries[filteredRemoved], evicted))
+                {
+                    filteredRemoved++;
+                }
+            }
+
+            _allEntries.RemoveRange(0, excess);
+
+            if (filteredRemoved > 0)
+            {
+                _filteredEntries.RemoveRange(0, filteredRemoved);
+
+                if (_selectedEntry != null)
+                {
+                    _selectedIndex = _filteredEntries.IndexOf(_selectedEntry);
+                    if (_selectedIndex < 0)
+                        _selectedEntry = null;
+                }
+            }
         }
 
         private void OnLogCleared()

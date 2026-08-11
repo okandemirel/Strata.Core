@@ -23,6 +23,9 @@ namespace Strada.Core.Sync
         private Entity _entity;
         private TProperty _lastValue;
         private bool _disposed;
+        // "The last Sync observed a change", not "needs syncing". It is reset at the top of
+        // every Sync: it used to be set on the first change and never cleared, so IsDirty
+        // latched true for the object's lifetime and reported nothing after that.
         private bool _dirty;
         private BindingSyncState _syncState = BindingSyncState.NotSynced;
         private string _lastError;
@@ -74,6 +77,8 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Sync()
         {
+            _dirty = false;
+
             try
             {
                 if (!_entities.Exists(_entity))
@@ -153,6 +158,8 @@ namespace Strada.Core.Sync
         private Entity _entity;
         private TComponent _lastValue;
         private bool _disposed;
+        // Same protocol as ComponentBinding<TComponent, TProperty>: "the last Sync observed a
+        // change", reset at the top of Sync rather than latching true forever.
         private bool _dirty;
         private BindingSyncState _syncState = BindingSyncState.NotSynced;
         private string _lastError;
@@ -176,6 +183,8 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Sync()
         {
+            _dirty = false;
+
             try
             {
                 if (!_entities.Exists(_entity))

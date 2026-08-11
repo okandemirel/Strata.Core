@@ -55,8 +55,56 @@ namespace Strada.Core.Editor.ModuleGenerator
             public static readonly GUIStyle WordWrapRichTextLabelStyle;
         }
 
+        private bool _validationDirty = true;
+        private bool _lastValidationPassed;
+
+        /// <summary>
+        /// Flags the cached validation result as stale. Call this from every control that mutates
+        /// the module definition.
+        /// </summary>
+        private void MarkValidationDirty()
+        {
+            _validationDirty = true;
+        }
+
+        private void OnFocus()
+        {
+            // Modules may have been added or removed on disk while the window was in the
+            // background, so the cached "module already exists" answer can no longer be trusted.
+            _validationDirty = true;
+        }
+
+        /// <summary>
+        /// Re-runs ValidateAll only when an input actually changed.
+        /// </summary>
+        /// <remarks>
+        /// ValidateAll reaches ModuleDiscovery.ModuleExists, which walks Assets/Modules
+        /// recursively, calls GetTypes() on every loaded assembly and runs an AssetDatabase
+        /// search. OnGUI runs at least twice per repaint and continuously while the pointer is
+        /// over the window, so running it unconditionally made that scan the dominant cost of
+        /// the window. Refreshing here - before any control that reads _validationMessages -
+        /// keeps the Layout and Repaint passes of one frame in agreement.
+        /// </remarks>
+        private void RefreshValidationIfDirty()
+        {
+            if (!_validationDirty)
+                return;
+
+            _lastValidationPassed = ValidateAll();
+            _validationDirty = false;
+        }
+
+        private bool CanGenerateCached()
+        {
+            return _generationState == GenerationState.Idle &&
+                   !string.IsNullOrEmpty(_moduleDefinition?.ModuleName) &&
+                   _lastValidationPassed;
+        }
+
         private void DrawHeader()
         {
+            RefreshValidationIfDirty();
+
             EditorGUILayout.Space(10);
 
             EditorGUILayout.BeginHorizontal();
@@ -108,7 +156,11 @@ namespace Strada.Core.Editor.ModuleGenerator
             if (EditorGUI.EndChangeCheck())
             {
                 _moduleDefinition.ModuleName = SanitizeModuleName(_moduleDefinition.ModuleName);
-                ValidateAll();
+
+                // Revalidate immediately rather than only flagging: DrawNameValidationStatus
+                // below reads _validationMessages in this same pass.
+                _validationDirty = true;
+                RefreshValidationIfDirty();
             }
 
             DrawNameValidationStatus();
@@ -121,6 +173,7 @@ namespace Strada.Core.Editor.ModuleGenerator
             if (EditorGUI.EndChangeCheck())
             {
                 _moduleDefinition.ApplyTypeDefaults();
+                MarkValidationDirty();
             }
 
             DrawModuleTypeDescription();
@@ -139,7 +192,12 @@ namespace Strada.Core.Editor.ModuleGenerator
 
             EditorGUILayout.LabelField("Namespace", EditorStyles.boldLabel);
             EditorGUILayout.BeginHorizontal();
+            EditorGUI.BeginChangeCheck();
             _moduleDefinition.Namespace = EditorGUILayout.TextField(_moduleDefinition.Namespace);
+            if (EditorGUI.EndChangeCheck())
+            {
+                MarkValidationDirty();
+            }
             if (!string.IsNullOrEmpty(_moduleDefinition.ModuleName))
             {
                 EditorGUILayout.LabelField($".{_moduleDefinition.ModuleName}", GUILayout.Width(150));
@@ -150,7 +208,12 @@ namespace Strada.Core.Editor.ModuleGenerator
 
             EditorGUILayout.LabelField("Target Path", EditorStyles.boldLabel);
             EditorGUILayout.BeginHorizontal();
+            EditorGUI.BeginChangeCheck();
             _moduleDefinition.TargetPath = EditorGUILayout.TextField(_moduleDefinition.TargetPath);
+            if (EditorGUI.EndChangeCheck())
+            {
+                MarkValidationDirty();
+            }
             if (GUILayout.Button("...", GUILayout.Width(30)))
             {
                 var path = EditorUtility.OpenFolderPanel("Select Module Location", _moduleDefinition.TargetPath, "");
@@ -158,6 +221,8 @@ namespace Strada.Core.Editor.ModuleGenerator
                 {
                     if (path.StartsWith(Application.dataPath))
                         _moduleDefinition.TargetPath = "Assets" + path.Substring(Application.dataPath.Length);
+
+                    MarkValidationDirty();
                 }
             }
             EditorGUILayout.EndHorizontal();
@@ -241,6 +306,7 @@ namespace Strada.Core.Editor.ModuleGenerator
                     _moduleDefinition.ParentModuleName = "";
                     _moduleDefinition.ParentModulePath = "";
                     _moduleDefinition.TargetPath = "Assets/Modules";
+                    MarkValidationDirty();
                 }
 
                 EditorGUILayout.EndHorizontal();
@@ -254,6 +320,8 @@ namespace Strada.Core.Editor.ModuleGenerator
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             var components = _moduleDefinition.Components;
+
+            EditorGUI.BeginChangeCheck();
 
             _ecsGroupExpanded = EditorGUILayout.Foldout(_ecsGroupExpanded, "ECS Components", true, Styles.GroupHeaderStyle);
             if (_ecsGroupExpanded)
@@ -325,6 +393,11 @@ namespace Strada.Core.Editor.ModuleGenerator
                 EditorGUI.indentLevel--;
             }
 
+            if (EditorGUI.EndChangeCheck())
+            {
+                MarkValidationDirty();
+            }
+
             EditorGUILayout.EndVertical();
         }
 
@@ -339,6 +412,7 @@ namespace Strada.Core.Editor.ModuleGenerator
             if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60)))
             {
                 RefreshExistingModules();
+                MarkValidationDirty();
             }
             EditorGUILayout.EndHorizontal();
 
@@ -456,6 +530,7 @@ namespace Strada.Core.Editor.ModuleGenerator
             }
 
             _moduleDefinition.TargetPath = module.Path;
+            MarkValidationDirty();
         }
 
         private void DrawPreviewPanel()
@@ -704,7 +779,7 @@ namespace Strada.Core.Editor.ModuleGenerator
             var name = _moduleDefinition.ModuleName;
             var ns = _moduleDefinition.FullNamespace;
 
-            return TemplateProcessor.GeneratePreview(fileName, name, ns, _settings);
+            return TemplateProcessor.GeneratePreview(fileName, name, ns, _settings, _moduleDefinition.Components);
         }
 
         private void DrawValidationStatus()
@@ -737,7 +812,7 @@ namespace Strada.Core.Editor.ModuleGenerator
 
             EditorGUILayout.Space(10);
 
-            var canGenerate = CanGenerate();
+            var canGenerate = CanGenerateCached();
             var buttonColor = canGenerate ? new Color(0.2f, 0.6f, 0.3f) : Color.gray;
             var buttonText = _generationState switch
             {

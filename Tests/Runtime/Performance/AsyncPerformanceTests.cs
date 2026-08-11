@@ -134,11 +134,21 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             sequence.Dispose();
         }
 
+        /// <summary>
+        /// Batched, not parallel. The handler returns <c>default</c> — an already-completed
+        /// ValueTask — so <see cref="EventBus.SendAsync{TSignal}"/> runs it inline on the calling
+        /// thread and the ValueTask is finished before the loop advances. By the time the await
+        /// loop below runs, all ten have long since completed: no continuation is scheduled, no
+        /// thread pool work item is queued, and no async state machine is allocated. What this
+        /// measures is the cost of the batching shape around a synchronous handler, which is
+        /// worth measuring — it just is not a parallelism figure, and calling it one made the
+        /// number mean something it does not.
+        /// </summary>
         [Test]
-        public async Task Benchmark_ParallelAsyncSignals()
+        public async Task Benchmark_BatchedAsyncSignals_SyncHandler()
         {
             const int Iterations = 1000;
-            const int ParallelCount = 10;
+            const int BatchSize = 10;
             int counter = 0;
 
             _bus.RegisterAsyncSignalHandler<AsyncSignal>((s, ct) =>
@@ -150,12 +160,12 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < Iterations; i++)
             {
-                var tasks = new ValueTask[ParallelCount];
-                for (int j = 0; j < ParallelCount; j++)
+                var tasks = new ValueTask[BatchSize];
+                for (int j = 0; j < BatchSize; j++)
                 {
                     tasks[j] = _bus.SendAsync(new AsyncSignal { Value = 1 });
                 }
-                for (int j = 0; j < ParallelCount; j++)
+                for (int j = 0; j < BatchSize; j++)
                 {
                     await tasks[j];
                 }
@@ -164,13 +174,14 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
             double avgMicroseconds = sw.Elapsed.TotalMilliseconds * 1000 / Iterations;
 
-            UnityEngine.Debug.Log($"[AsyncEventBus] Parallel SendAsync ({Iterations} batches of {ParallelCount}):");
+            UnityEngine.Debug.Log($"[AsyncEventBus] Batched SendAsync, sync handler ({Iterations} batches of {BatchSize}):");
             UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
             UnityEngine.Debug.Log($"  Avg: {avgMicroseconds:F2}us per batch");
             UnityEngine.Debug.Log($"  Total dispatches: {counter}");
+            UnityEngine.Debug.Log("  (All dispatches complete synchronously on this thread - this is not a parallelism measurement.)");
 
-            Assert.AreEqual(Iterations * ParallelCount, counter);
-            Assert.Less(sw.ElapsedMilliseconds, 200, "Parallel async too slow");
+            Assert.AreEqual(Iterations * BatchSize, counter);
+            Assert.Less(sw.ElapsedMilliseconds, 200, "Batched async too slow");
         }
 
         [Test]

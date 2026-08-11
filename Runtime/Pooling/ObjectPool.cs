@@ -4,7 +4,16 @@ using System.Runtime.CompilerServices;
 
 namespace Strada.Core.Pooling
 {
-    public sealed class ObjectPool<T> : IDisposable where T : class
+    /// <summary>
+    /// Non-generic despawn entry point, so a registry holding pools as <c>object</c> can return
+    /// an instance to the pool that matches its runtime type rather than its static type.
+    /// </summary>
+    internal interface IObjectPool
+    {
+        bool DespawnObject(object instance);
+    }
+
+    public sealed class ObjectPool<T> : IDisposable, IObjectPool where T : class
     {
         private readonly Stack<T> _available;
         private readonly HashSet<T> _inPool;
@@ -67,6 +76,13 @@ namespace Strada.Core.Pooling
             if (instance == null) return;
             if (_disposed) return;
 
+            // The membership test has to come before the reset callbacks, not after the push.
+            // Disposing two copies of a PooledHandle, or calling Despawn twice by hand, would
+            // otherwise re-run OnDespawn and _onDespawn against an instance the pool already
+            // considers idle — silently resetting it a second time and surfacing as corrupt
+            // state on some later, unrelated Spawn.
+            if (_inPool.Contains(instance)) return;
+
             if (instance is IPoolable p)
                 p.OnDespawn();
 
@@ -74,8 +90,15 @@ namespace Strada.Core.Pooling
 
             if (_available.Count < _maxSize)
             {
-                if (!_inPool.Add(instance))
-                    return;
+                // Nothing proves this instance came from this pool, and a foreign one was never
+                // counted by _totalCreated, so pushing it made _available.Count exceed
+                // _totalCreated and drove ActiveCount negative. Account for it here instead:
+                // tracking ownership explicitly would mean keeping a strong reference to every
+                // spawned object for the lifetime of the pool.
+                if (_available.Count >= _totalCreated)
+                    _totalCreated++;
+
+                _inPool.Add(instance);
                 _available.Push(instance);
                 return;
             }
@@ -83,10 +106,20 @@ namespace Strada.Core.Pooling
             // Pool is full, so this instance is discarded rather than retained. It has to be
             // accounted for: previously it was dropped on the floor without disposal, and
             // _totalCreated kept counting it, so ActiveCount (_totalCreated - available) grew
-            // without bound for the lifetime of the pool.
-            _totalCreated--;
+            // without bound for the lifetime of the pool. The guard keeps the decrement from
+            // pushing _totalCreated below the number of instances the pool is already holding.
+            if (_totalCreated > _available.Count)
+                _totalCreated--;
+
             if (instance is IDisposable disposable)
                 disposable.Dispose();
+        }
+
+        bool IObjectPool.DespawnObject(object instance)
+        {
+            if (!(instance is T typed)) return false;
+            Despawn(typed);
+            return true;
         }
 
         public void Prewarm(int count)

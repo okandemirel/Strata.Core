@@ -32,17 +32,24 @@ namespace Strada.Core.Modules
         /// <summary>
         /// Wrapper that holds system instance along with its configuration.
         /// </summary>
-        private readonly struct SystemInstance
+        private struct SystemInstance
         {
             public readonly ISystem System;
             public readonly int Order;
             public readonly string Name;
+
+            /// <summary>
+            /// Set once this system has thrown. A system that faults every frame would otherwise
+            /// write one stack trace per frame for the rest of the run, so only the first is logged.
+            /// </summary>
+            public bool Faulted;
 
             public SystemInstance(ISystem system, int order, string name)
             {
                 System = system;
                 Order = order;
                 Name = name;
+                Faulted = false;
             }
         }
 
@@ -89,14 +96,16 @@ namespace Strada.Core.Modules
         /// <param name="config">The module configuration containing system entries.</param>
         public void AddSystemsFromConfig(ModuleConfig config)
         {
+            ThrowIfDisposed();
+
             if (config == null || !config.Enabled)
                 return;
 
-            foreach (var entry in config.Systems)
+            // GetEnabledSystems() is the accessor that also filters out null list elements.
+            // Walking config.Systems directly reproduced only the Enabled/IsValid predicates, so a
+            // null entry — which OnValidate only strips in the Editor — dereferenced here.
+            foreach (var entry in config.GetEnabledSystems())
             {
-                if (!entry.Enabled || !entry.IsValid)
-                    continue;
-
                 var system = CreateSystem(entry);
                 if (system != null)
                 {
@@ -111,8 +120,19 @@ namespace Strada.Core.Modules
         /// <param name="configs">The module configurations to process.</param>
         public void AddSystemsFromConfigs(IEnumerable<ModuleConfig> configs)
         {
+            ThrowIfDisposed();
+
+            if (configs == null)
+                return;
+
+            // A ModuleConfig listed twice would otherwise have every one of its systems
+            // instantiated and ticked twice for the life of the process.
+            var seen = new HashSet<ModuleConfig>();
             foreach (var config in configs)
             {
+                if (config == null || !seen.Add(config))
+                    continue;
+
                 AddSystemsFromConfig(config);
             }
         }
@@ -126,6 +146,12 @@ namespace Strada.Core.Modules
         /// <param name="name">Optional display name for debugging.</param>
         public void AddSystem(ISystem system, UpdatePhase phase = UpdatePhase.Update, int order = 0, string name = null)
         {
+            if (system == null) throw new ArgumentNullException(nameof(system));
+            // Without this a system added after Dispose() is injected, initialized and inserted
+            // into lists that will never be drained again — it can never be disposed, because the
+            // _disposed short-circuit makes a second Dispose() a no-op.
+            ThrowIfDisposed();
+
             if (_initialized)
             {
                 StradaLog.LogWarning("Adding system after initialization. System will be initialized immediately.", LogModule.Modules);
@@ -133,8 +159,20 @@ namespace Strada.Core.Modules
                 system.Initialize();
             }
 
+            // C# does not range-check enum casts and Unity deserializes enums as raw ints without
+            // validating them, so a hand-edited asset or `AddSystem(sys, (UpdatePhase)99)` would
+            // index past _systemsByPhase and abort the whole bootstrap.
+            int phaseIndex = (int)phase;
+            if ((uint)phaseIndex >= (uint)_systemsByPhase.Length)
+            {
+                StradaLog.LogError(
+                    $"System '{name ?? system.GetType().Name}' has an out-of-range UpdatePhase ({phaseIndex}); defaulting to Update.",
+                    LogModule.Modules);
+                phaseIndex = (int)UpdatePhase.Update;
+            }
+
             var instance = new SystemInstance(system, order, name ?? system.GetType().Name);
-            var phaseList = _systemsByPhase[(int)phase];
+            var phaseList = _systemsByPhase[phaseIndex];
 
             int insertIndex = 0;
             for (int i = 0; i < phaseList.Count; i++)
@@ -152,6 +190,7 @@ namespace Strada.Core.Modules
         /// </summary>
         public void Initialize()
         {
+            ThrowIfDisposed();
             if (_initialized) return;
             _initialized = true;
 
@@ -161,14 +200,29 @@ namespace Strada.Core.Modules
             }
 
             var initSystems = _systemsByPhase[(int)UpdatePhase.Initialization];
-            for (int i = 0; i < initSystems.Count; i++)
-                initSystems[i].System.Initialize();
+            InitializePhase(initSystems);
 
             for (int phase = 1; phase < _systemsByPhase.Length; phase++)
             {
-                var systems = _systemsByPhase[phase];
-                for (int i = 0; i < systems.Count; i++)
+                InitializePhase(_systemsByPhase[phase]);
+            }
+        }
+
+        private static void InitializePhase(List<SystemInstance> systems)
+        {
+            for (int i = 0; i < systems.Count; i++)
+            {
+                try
+                {
                     systems[i].System.Initialize();
+                }
+                catch (Exception ex)
+                {
+                    // Without isolation, one system throwing in Initialize leaves every system
+                    // ordered after it uninitialized while the bootstrap still reports success.
+                    StradaLog.LogError($"System '{systems[i].Name}' threw during Initialize.", LogModule.Modules);
+                    Debug.LogException(ex);
+                }
             }
         }
 
@@ -178,9 +232,7 @@ namespace Strada.Core.Modules
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Update(float deltaTime)
         {
-            var systems = _systemsByPhase[(int)UpdatePhase.Update];
-            for (int i = 0; i < systems.Count; i++)
-                systems[i].System.Update(deltaTime);
+            RunPhase((int)UpdatePhase.Update, deltaTime);
         }
 
         /// <summary>
@@ -189,9 +241,7 @@ namespace Strada.Core.Modules
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void LateUpdate(float deltaTime)
         {
-            var systems = _systemsByPhase[(int)UpdatePhase.LateUpdate];
-            for (int i = 0; i < systems.Count; i++)
-                systems[i].System.Update(deltaTime);
+            RunPhase((int)UpdatePhase.LateUpdate, deltaTime);
         }
 
         /// <summary>
@@ -200,9 +250,45 @@ namespace Strada.Core.Modules
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void FixedUpdate(float fixedDeltaTime)
         {
-            var systems = _systemsByPhase[(int)UpdatePhase.FixedUpdate];
+            RunPhase((int)UpdatePhase.FixedUpdate, fixedDeltaTime);
+        }
+
+        /// <summary>
+        /// Ticks every system in one phase, isolating each call so that a system which throws
+        /// cannot stop the systems ordered after it. Without this, a single throwing system
+        /// silently skipped every later system in its phase on every frame for the rest of the run.
+        /// </summary>
+        private void RunPhase(int phase, float deltaTime)
+        {
+            // A late frame can still arrive after teardown; degrade quietly rather than
+            // touching cleared lists.
+            if (_disposed) return;
+
+            var systems = _systemsByPhase[phase];
             for (int i = 0; i < systems.Count; i++)
-                systems[i].System.Update(fixedDeltaTime);
+            {
+                try
+                {
+                    systems[i].System.Update(deltaTime);
+                }
+                catch (Exception ex)
+                {
+                    var instance = systems[i];
+                    if (!instance.Faulted)
+                    {
+                        // Only the first throw is reported. A system that faults every frame would
+                        // otherwise write one stack trace per frame for the rest of the run — the
+                        // exception is still surfaced through Unity exactly as it was when it
+                        // escaped to the MonoBehaviour boundary.
+                        instance.Faulted = true;
+                        systems[i] = instance;
+                        StradaLog.LogError(
+                            $"System '{instance.Name}' threw during Update; further exceptions from it are not reported.",
+                            LogModule.Modules);
+                        Debug.LogException(ex);
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -214,7 +300,19 @@ namespace Strada.Core.Modules
             _disposed = true;
 
             for (int i = _allSystems.Count - 1; i >= 0; i--)
-                _allSystems[i].System.Dispose();
+            {
+                try
+                {
+                    _allSystems[i].System.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    // Keep draining: one system throwing here previously skipped the disposal of
+                    // every system registered before it and left the phase lists populated.
+                    StradaLog.LogError($"System '{_allSystems[i].Name}' threw during Dispose.", LogModule.Modules);
+                    Debug.LogException(ex);
+                }
+            }
 
             _allSystems.Clear();
             for (int i = 0; i < _systemsByPhase.Length; i++)
@@ -247,6 +345,12 @@ namespace Strada.Core.Modules
             }
 
             return sb.ToString();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ThrowIfDisposed()
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(SystemRunner));
         }
 
         private ISystem CreateSystem(SystemEntry entry)

@@ -50,6 +50,12 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         private EntityManager _entityManager;
         private const int WarmupIterations = 100;
 
+        // Sampling for the repeatable measurements below. A single Stopwatch reading is one draw
+        // from a distribution whose tail is set by GC pauses, OS scheduling and whatever else the
+        // Editor is doing that millisecond; every published ECS number used to come from n=1.
+        private const int SampleCount = 11;
+        private const int DiscardedSamples = 3;
+
         [SetUp]
         public void Setup()
         {
@@ -60,6 +66,40 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         public void TearDown()
         {
             _entityManager?.Dispose();
+        }
+
+        /// <summary>
+        /// Runs <paramref name="body"/> repeatedly and returns the median elapsed milliseconds,
+        /// discarding the first few passes.
+        /// </summary>
+        /// <remarks>
+        /// The discarded passes absorb first-call JIT of the closed generic and its delegate plus
+        /// cold caches; collecting immediately before each timed pass keeps a collection triggered
+        /// by an earlier benchmark from landing inside this one's window. Only measurements whose
+        /// body is idempotent can use this — creation and destruction benchmarks consume the
+        /// state they measure and warm up explicitly instead.
+        /// </remarks>
+        private static double MedianMs(Action body, int samples = SampleCount, int discard = DiscardedSamples)
+        {
+            var timings = new double[samples];
+
+            for (int i = 0; i < samples + discard; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
+                var sw = Stopwatch.StartNew();
+                body();
+                sw.Stop();
+
+                if (i >= discard)
+                    timings[i - discard] = sw.Elapsed.TotalMilliseconds;
+            }
+
+            Array.Sort(timings);
+            return samples % 2 == 1
+                ? timings[samples / 2]
+                : (timings[samples / 2 - 1] + timings[samples / 2]) * 0.5;
         }
 
         [Test]
@@ -96,6 +136,15 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         {
             const int Count = 100_000;
 
+            // Without this the first-call JIT of the closed generic AddComponent<Position> and
+            // its storage lookup land inside the timed window.
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                var w = _entityManager.CreateEntity();
+                _entityManager.AddComponent(w, new Position { X = i });
+                _entityManager.DestroyEntity(w);
+            }
+
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < Count; i++)
             {
@@ -117,6 +166,15 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         public void Benchmark_EntityCreation_With3Components_100k()
         {
             const int Count = 100_000;
+
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                var w = _entityManager.CreateEntity();
+                _entityManager.AddComponent(w, new Position { X = i });
+                _entityManager.AddComponent(w, new Velocity { X = 1 });
+                _entityManager.AddComponent(w, new Health { Current = 100, Max = 100 });
+                _entityManager.DestroyEntity(w);
+            }
 
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < Count; i++)
@@ -154,23 +212,32 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             int iterCount = 0;
             float sum = 0;
 
-            var sw = Stopwatch.StartNew();
-            _entityManager.ForEach<Position>((int idx, ref Position p) =>
+            double ms = MedianMs(() =>
             {
-                iterCount++;
-                sum += p.X + p.Y + p.Z;
+                iterCount = 0;
+                sum = 0;
+                _entityManager.ForEach<Position>((int idx, ref Position p) =>
+                {
+                    iterCount++;
+                    sum += p.X + p.Y + p.Z;
+                });
             });
-            sw.Stop();
 
-            double usPerEntity = (sw.Elapsed.TotalMilliseconds * 1000) / Count;
+            double usPerEntity = (ms * 1000) / Count;
             double nsPerEntity = usPerEntity * 1000;
 
             UnityEngine.Debug.Log($"=== STRADA ECS: Single Component Query ({Count:N0} entities) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-entity: {nsPerEntity:F1}ns ({usPerEntity:F4}μs)");
 
             Assert.AreEqual(Count, iterCount);
-            Assert.Less(usPerEntity, 0.1, "Single component query should be under 0.1μs per entity");
+            // `sum` is otherwise a dead store and the loads feeding it are removable, which is
+            // how a query benchmark ends up reporting a cost well under the real one.
+            Assert.AreNotEqual(0f, sum, "The query result must be observed");
+            // README publishes 6.6ns/entity. The margin covers the spread between the machine
+            // that produced that figure and slower CI hardware; a checked-in per-machine
+            // baseline would be the right way to close it further.
+            Assert.Less(usPerEntity, 0.04, "Single component query should be under 0.04μs per entity (README: 6.6ns)");
         }
 
         [Test]
@@ -187,25 +254,27 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
             int iterCount = 0;
 
-            var sw = Stopwatch.StartNew();
-            _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+            double ms = MedianMs(() =>
             {
-                iterCount++;
-                p.X += v.X;
-                p.Y += v.Y;
-                p.Z += v.Z;
+                iterCount = 0;
+                _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+                {
+                    iterCount++;
+                    p.X += v.X;
+                    p.Y += v.Y;
+                    p.Z += v.Z;
+                });
             });
-            sw.Stop();
 
-            double usPerEntity = (sw.Elapsed.TotalMilliseconds * 1000) / Count;
+            double usPerEntity = (ms * 1000) / Count;
             double nsPerEntity = usPerEntity * 1000;
 
             UnityEngine.Debug.Log($"=== STRADA ECS: Two Component Query ({Count:N0} entities) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-entity: {nsPerEntity:F1}ns ({usPerEntity:F4}μs)");
 
             Assert.AreEqual(Count, iterCount);
-            Assert.Less(usPerEntity, 0.2, "Two component query should be under 0.2μs per entity");
+            Assert.Less(usPerEntity, 0.06, "Two component query should be under 0.06μs per entity");
         }
 
         [Test]
@@ -223,24 +292,26 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
             int iterCount = 0;
 
-            var sw = Stopwatch.StartNew();
-            _entityManager.ForEach<Position, Velocity, Health>((int idx, ref Position p, ref Velocity v, ref Health h) =>
+            double ms = MedianMs(() =>
             {
-                iterCount++;
-                p.X += v.X;
-                h.Current -= 1;
+                iterCount = 0;
+                _entityManager.ForEach<Position, Velocity, Health>((int idx, ref Position p, ref Velocity v, ref Health h) =>
+                {
+                    iterCount++;
+                    p.X += v.X;
+                    h.Current -= 1;
+                });
             });
-            sw.Stop();
 
-            double usPerEntity = (sw.Elapsed.TotalMilliseconds * 1000) / Count;
+            double usPerEntity = (ms * 1000) / Count;
             double nsPerEntity = usPerEntity * 1000;
 
             UnityEngine.Debug.Log($"=== STRADA ECS: Three Component Query ({Count:N0} entities) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-entity: {nsPerEntity:F1}ns ({usPerEntity:F4}μs)");
 
             Assert.AreEqual(Count, iterCount);
-            Assert.Less(usPerEntity, 0.3, "Three component query should be under 0.3μs per entity");
+            Assert.Less(usPerEntity, 0.08, "Three component query should be under 0.08μs per entity");
         }
 
         [Test]
@@ -263,27 +334,29 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 p.Z += v.Z;
             });
 
-            var sw = Stopwatch.StartNew();
-            for (int frame = 0; frame < FrameCount; frame++)
+            double ms = MedianMs(() =>
             {
-                _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+                for (int frame = 0; frame < FrameCount; frame++)
                 {
-                    p.X += v.X;
-                    p.Y += v.Y;
-                    p.Z += v.Z;
-                });
-            }
-            sw.Stop();
+                    _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+                    {
+                        p.X += v.X;
+                        p.Y += v.Y;
+                        p.Z += v.Z;
+                    });
+                }
+            });
 
-            double msPerFrame = sw.Elapsed.TotalMilliseconds / FrameCount;
-            double usPerEntity = (sw.Elapsed.TotalMilliseconds * 1000) / (FrameCount * EntityCount);
+            double msPerFrame = ms / FrameCount;
+            double usPerEntity = (ms * 1000) / (FrameCount * EntityCount);
 
             UnityEngine.Debug.Log($"=== STRADA ECS: Simulation Loop ({EntityCount:N0} entities, {FrameCount} frames) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-frame: {msPerFrame:F2}ms");
             UnityEngine.Debug.Log($"  Per-entity-frame: {usPerEntity * 1000:F1}ns");
 
-            Assert.Less(msPerFrame, 10, "Per frame should be under 10ms for 100k entities");
+            // README publishes 1.62ms/frame; 10ms tolerated a 6x regression without complaint.
+            Assert.Less(msPerFrame, 5, "Per frame should be under 5ms for 100k entities (README: 1.62ms)");
         }
 
         [Test]
@@ -291,6 +364,16 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         {
             const int Count = 100_000;
             var entities = new Entity[Count];
+
+            // Warm up destruction on a throwaway batch, so the JIT of DestroyEntity and the
+            // storage walk it performs are paid before the Stopwatch starts.
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                var w = _entityManager.CreateEntity();
+                _entityManager.AddComponent(w, new Position());
+                _entityManager.AddComponent(w, new Velocity());
+                _entityManager.DestroyEntity(w);
+            }
 
             for (int i = 0; i < Count; i++)
             {
@@ -359,6 +442,17 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 entities[i] = _entityManager.CreateEntity();
             }
 
+            // Both timed windows below start cold otherwise: the first AddComponent<Position>
+            // and the first RemoveComponent<Position> each pay generic JIT and a storage
+            // lookup inside the measurement.
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                var w = _entityManager.CreateEntity();
+                _entityManager.AddComponent(w, new Position { X = i });
+                _entityManager.RemoveComponent<Position>(w);
+                _entityManager.DestroyEntity(w);
+            }
+
             var addSw = Stopwatch.StartNew();
             for (int i = 0; i < Count; i++)
             {
@@ -399,18 +493,20 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
             int hasCount = 0;
 
-            var sw = Stopwatch.StartNew();
-            for (int i = 0; i < Count; i++)
+            double ms = MedianMs(() =>
             {
-                if (_entityManager.HasComponent<Position>(entities[i]))
-                    hasCount++;
-            }
-            sw.Stop();
+                hasCount = 0;
+                for (int i = 0; i < Count; i++)
+                {
+                    if (_entityManager.HasComponent<Position>(entities[i]))
+                        hasCount++;
+                }
+            });
 
-            double nsPerOp = sw.Elapsed.TotalMilliseconds * 1000 * 1000 / Count;
+            double nsPerOp = ms * 1000 * 1000 / Count;
 
             UnityEngine.Debug.Log($"=== STRADA ECS: HasComponent Check ({Count:N0} checks) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-check: {nsPerOp:F1}ns");
 
             Assert.AreEqual(Count / 2, hasCount);
@@ -431,20 +527,25 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
 
             float sum = 0;
 
-            var sw = Stopwatch.StartNew();
-            for (int i = 0; i < Count; i++)
+            double ms = MedianMs(() =>
             {
-                var pos = _entityManager.GetComponent<Position>(entities[i]);
-                sum += pos.X;
-            }
-            sw.Stop();
+                sum = 0;
+                for (int i = 0; i < Count; i++)
+                {
+                    var pos = _entityManager.GetComponent<Position>(entities[i]);
+                    sum += pos.X;
+                }
+            });
 
-            double nsPerOp = sw.Elapsed.TotalMilliseconds * 1000 * 1000 / Count;
+            double nsPerOp = ms * 1000 * 1000 / Count;
 
             UnityEngine.Debug.Log($"=== STRADA ECS: GetComponent ({Count:N0} gets) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-get: {nsPerOp:F1}ns");
 
+            // The accumulated value is the only thing rooting the fetched components; without
+            // it the loop is a sequence of dead loads.
+            Assert.AreNotEqual(0f, sum, "The fetched components must be observed");
             Assert.Less(nsPerOp, 100, "GetComponent should be under 100ns");
         }
 
@@ -460,17 +561,18 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 _entityManager.AddComponent(entities[i], new Position { X = 0 });
             }
 
-            var sw = Stopwatch.StartNew();
-            for (int i = 0; i < Count; i++)
+            double ms = MedianMs(() =>
             {
-                _entityManager.SetComponent(entities[i], new Position { X = i, Y = i, Z = i });
-            }
-            sw.Stop();
+                for (int i = 0; i < Count; i++)
+                {
+                    _entityManager.SetComponent(entities[i], new Position { X = i, Y = i, Z = i });
+                }
+            });
 
-            double nsPerOp = sw.Elapsed.TotalMilliseconds * 1000 * 1000 / Count;
+            double nsPerOp = ms * 1000 * 1000 / Count;
 
             UnityEngine.Debug.Log($"=== STRADA ECS: SetComponent ({Count:N0} sets) ===");
-            UnityEngine.Debug.Log($"  Total: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median: {ms:F2}ms over {SampleCount} samples");
             UnityEngine.Debug.Log($"  Per-set: {nsPerOp:F1}ns");
 
             Assert.Less(nsPerOp, 100, "SetComponent should be under 100ns");
@@ -539,26 +641,28 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             int posVelCount = 0;
             int posHealthCount = 0;
 
-            var sw = Stopwatch.StartNew();
-
-            _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+            double ms = MedianMs(() =>
             {
-                posVelCount++;
-                p.X += v.X;
-            });
+                posVelCount = 0;
+                posHealthCount = 0;
 
-            _entityManager.ForEach<Position, Health>((int idx, ref Position p, ref Health h) =>
-            {
-                posHealthCount++;
-                h.Current -= 1;
-            });
+                _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+                {
+                    posVelCount++;
+                    p.X += v.X;
+                });
 
-            sw.Stop();
+                _entityManager.ForEach<Position, Health>((int idx, ref Position p, ref Health h) =>
+                {
+                    posHealthCount++;
+                    h.Current -= 1;
+                });
+            });
 
             UnityEngine.Debug.Log($"=== STRADA ECS: Mixed Entity Types ({Count:N0} entities) ===");
             UnityEngine.Debug.Log($"  Position+Velocity matches: {posVelCount:N0}");
             UnityEngine.Debug.Log($"  Position+Health matches: {posHealthCount:N0}");
-            UnityEngine.Debug.Log($"  Total query time: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            UnityEngine.Debug.Log($"  Median query time: {ms:F2}ms over {SampleCount} samples");
 
             Assert.AreEqual(Count / 2, posVelCount);
             Assert.AreEqual(Count / 3 + 1, posHealthCount);
@@ -591,40 +695,43 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             }
             _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) => p.X += v.X);
 
-            var swManual = Stopwatch.StartNew();
-            for (int f = 0; f < Frames; f++)
+            double manualMs = MedianMs(() =>
             {
-                for (int i = 0; i < Count; i++)
+                for (int f = 0; f < Frames; f++)
                 {
-                    manualPositions[i].X += manualVelocities[i].X;
-                    manualPositions[i].Y += manualVelocities[i].Y;
-                    manualPositions[i].Z += manualVelocities[i].Z;
+                    for (int i = 0; i < Count; i++)
+                    {
+                        manualPositions[i].X += manualVelocities[i].X;
+                        manualPositions[i].Y += manualVelocities[i].Y;
+                        manualPositions[i].Z += manualVelocities[i].Z;
+                    }
                 }
-            }
-            swManual.Stop();
+            });
 
-            var swECS = Stopwatch.StartNew();
-            for (int f = 0; f < Frames; f++)
+            double ecsMs = MedianMs(() =>
             {
-                _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+                for (int f = 0; f < Frames; f++)
                 {
-                    p.X += v.X;
-                    p.Y += v.Y;
-                    p.Z += v.Z;
-                });
-            }
-            swECS.Stop();
+                    _entityManager.ForEach<Position, Velocity>((int idx, ref Position p, ref Velocity v) =>
+                    {
+                        p.X += v.X;
+                        p.Y += v.Y;
+                        p.Z += v.Z;
+                    });
+                }
+            });
 
-            double manualMs = swManual.Elapsed.TotalMilliseconds;
-            double ecsMs = swECS.Elapsed.TotalMilliseconds;
             double overhead = ecsMs / manualMs;
 
             UnityEngine.Debug.Log($"=== STRADA ECS vs Manual Arrays ({Count:N0} entities, {Frames} frames) ===");
-            UnityEngine.Debug.Log($"  Manual arrays: {manualMs:F2}ms");
-            UnityEngine.Debug.Log($"  ECS ForEach:   {ecsMs:F2}ms");
+            UnityEngine.Debug.Log($"  Manual arrays: {manualMs:F2}ms (median of {SampleCount})");
+            UnityEngine.Debug.Log($"  ECS ForEach:   {ecsMs:F2}ms (median of {SampleCount})");
             UnityEngine.Debug.Log($"  ECS Overhead:  {overhead:F2}x");
 
-            Assert.Less(overhead, 10.0, "ECS overhead should be less than 10x manual arrays");
+            // Both legs run on the same machine in the same run, so this ratio is the one
+            // assertion here that does not need slack for unknown hardware. README publishes
+            // 1.56x; the previous bound of 10x tolerated a 6x regression.
+            Assert.Less(overhead, 3.0, "ECS overhead should be less than 3x manual arrays (README: 1.56x)");
         }
     }
 }

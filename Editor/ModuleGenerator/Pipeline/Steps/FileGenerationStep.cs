@@ -153,6 +153,50 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
             AssetDatabase.Refresh();
         }
 
+        /// <summary>
+        /// Renders the file that generation would actually write, for the preview panel.
+        /// </summary>
+        /// <remarks>
+        /// The preview used to keep its own copy of these twelve templates, which had already
+        /// drifted from what generation emits (the service base clause and the controller's
+        /// injected service were unconditional in the preview but conditional here). Routing the
+        /// preview through the same methods is the only way the two cannot disagree.
+        ///
+        /// Dispatch is on exact file names built from <paramref name="moduleName"/> rather than
+        /// on suffix tests, because suffix tests are ambiguous: a module called "Inventory"
+        /// produces "InventoryService.cs", which a StartsWith("I") test mistakes for the
+        /// interface file.
+        /// </remarks>
+        internal static string GeneratePreview(string fileName, string moduleName, string ns,
+            StradaGeneratorSettings settings, ComponentSelection components)
+        {
+            var step = new FileGenerationStep
+            {
+                _settings = settings ?? StradaGeneratorSettings.GetOrCreateSettings()
+            };
+
+            // A caller that does not know the selection gets the generator's common case.
+            var hasServiceInterface = components?.ServiceInterface ?? true;
+
+            if (fileName == $"{moduleName}ModuleConfig.cs") return step.GenerateModuleConfig(moduleName, ns);
+            if (fileName == $"I{moduleName}Service.cs") return step.GenerateServiceInterface(moduleName, ns);
+            if (fileName == $"{moduleName}Service.cs") return step.GenerateService(moduleName, ns, hasServiceInterface);
+            if (fileName == $"{moduleName}Controller.cs") return step.GenerateController(moduleName, ns, hasServiceInterface);
+            if (fileName == $"{moduleName}Model.cs") return step.GenerateModel(moduleName, ns);
+            if (fileName == $"{moduleName}View.cs") return step.GenerateView(moduleName, ns);
+            if (fileName == $"{moduleName}System.cs") return step.GenerateSystem(moduleName, ns);
+            if (fileName == $"{moduleName}Component.cs") return step.GenerateComponent(moduleName, ns);
+            if (fileName == $"{moduleName}Mediator.cs") return step.GenerateMediator(moduleName, ns);
+            if (fileName == $"CD_{moduleName}.cs") return step.GenerateConfigData(moduleName, ns);
+            if (fileName == $"{moduleName}Config.cs") return step.GenerateValueObject(moduleName, ns);
+            if (fileName == $"{moduleName}Events.cs") return step.GenerateEvents(moduleName, ns);
+            if (fileName == $"{moduleName}Signals.cs") return step.GenerateSignals(moduleName, ns);
+            if (fileName == $"{moduleName}EditorTests.cs") return step.GenerateEditorTests(moduleName, ns);
+            if (fileName == $"{moduleName}Tests.cs") return step.GenerateRuntimeTests(moduleName, ns);
+
+            return $"// Preview not available for {fileName}";
+        }
+
         private string WrapInNamespace(string ns, string[] usings, Action<StringBuilder> writeBody)
         {
             var sb = new StringBuilder();

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using Strada.Core.DI.Attributes;
@@ -7,9 +8,11 @@ namespace Strada.Core.DI
 {
     public static class LifecycleProcessor
     {
-        private static readonly Dictionary<Type, MethodInfo[]> PostConstructCache = new();
-        private static readonly Dictionary<Type, MethodInfo[]> DeConstructCache = new();
-        private static readonly object _lock = new();
+        // Concurrent, not Dictionary + lock: the fast-path read used to run outside the lock that
+        // guarded the writes, and a Dictionary resize reassigns _buckets and _entries separately —
+        // a reader racing that sees a torn pair and either faults or walks a corrupted chain forever.
+        private static readonly ConcurrentDictionary<Type, MethodInfo[]> PostConstructCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo[]> DeConstructCache = new();
         private const BindingFlags MethodFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
         public static void InvokePostConstruct(object target)
@@ -25,10 +28,14 @@ namespace Strada.Core.DI
                 {
                     method.Invoke(target, null);
                 }
-                catch (TargetInvocationException e)
+                // Broad catch: MethodInfo.Invoke also throws TargetException, MethodAccessException
+                // and friends directly, without wrapping. Those used to escape uncaught and with no
+                // indication of which member failed.
+                catch (Exception e)
                 {
                     throw new InvalidOperationException(
-                        $"[PostConstruct] Error invoking {method.Name} on {type.Name}", e.InnerException ?? e);
+                        $"[PostConstruct] Error invoking {method.Name} on {type.Name}",
+                        (e as TargetInvocationException)?.InnerException ?? e);
                 }
             }
         }
@@ -48,26 +55,27 @@ namespace Strada.Core.DI
                 }
                 catch (Exception e)
                 {
+                    // The player log is world-readable on desktop and Android, so the release build
+                    // gets the message only — not the stack trace with its source file paths.
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                     UnityEngine.Debug.LogError(
                         $"[DeConstruct] Error invoking {method.Name} on {type.Name}: {e}");
+#else
+                    UnityEngine.Debug.LogError(
+                        $"[DeConstruct] Error invoking {method.Name} on {type.Name}: {e.Message}");
+#endif
                 }
             }
         }
 
-        private static MethodInfo[] GetOrCacheMethods(Type type, Dictionary<Type, MethodInfo[]> cache, Type attributeType)
+        private static MethodInfo[] GetOrCacheMethods(Type type, ConcurrentDictionary<Type, MethodInfo[]> cache, Type attributeType)
         {
             if (cache.TryGetValue(type, out var methods))
                 return methods;
 
-            lock (_lock)
-            {
-                if (cache.TryGetValue(type, out methods))
-                    return methods;
-
-                methods = FindMethodsWithAttribute(type, attributeType);
-                cache[type] = methods;
-                return methods;
-            }
+            // GetOrAdd with an already-computed value rather than a lambda: a lambda would have to
+            // capture attributeType, allocating a closure on a path that is otherwise allocation-free.
+            return cache.GetOrAdd(type, FindMethodsWithAttribute(type, attributeType));
         }
 
         private static MethodInfo[] FindMethodsWithAttribute(Type type, Type attributeType)
@@ -77,8 +85,20 @@ namespace Strada.Core.DI
 
             foreach (var method in methods)
             {
-                if (method.GetCustomAttribute(attributeType) != null && method.GetParameters().Length == 0)
-                    result.Add(method);
+                if (method.GetCustomAttribute(attributeType) == null || method.GetParameters().Length != 0)
+                    continue;
+
+                // MethodInfo.Invoke on an open generic method throws InvalidOperationException rather
+                // than the TargetInvocationException the call sites unwrap, so filter it out here.
+                if (method.ContainsGenericParameters)
+                {
+                    UnityEngine.Debug.LogError(
+                        $"[Strada DI] '{type.Name}.{method.Name}' carries {attributeType.Name} but is a generic method " +
+                        "definition and cannot be invoked; it will be ignored.");
+                    continue;
+                }
+
+                result.Add(method);
             }
 
             return result.ToArray();
@@ -86,11 +106,8 @@ namespace Strada.Core.DI
 
         public static void ClearCache()
         {
-            lock (_lock)
-            {
-                PostConstructCache.Clear();
-                DeConstructCache.Clear();
-            }
+            PostConstructCache.Clear();
+            DeConstructCache.Clear();
         }
     }
 }

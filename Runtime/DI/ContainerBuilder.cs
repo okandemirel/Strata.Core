@@ -74,8 +74,44 @@ namespace Strada.Core.DI
         public IContainer Build()
         {
             DetectCircularDependencies();
+            DetectCaptiveDependencies();
             var container = new Container(_registrations, autoRegisterSelf: true);
             return container;
+        }
+
+        /// <summary>
+        /// Rejects Singleton -> Scoped constructor edges before they become a confusing runtime failure.
+        /// </summary>
+        /// <remarks>
+        /// A singleton is built by the root container, which has no scope, so the scoped dependency
+        /// resolves through the root's throwing factory and the caller sees "Cannot resolve scoped
+        /// type from root container. Use CreateScope() first." on a type they resolved from a scope.
+        /// The graph can never resolve, so failing at Build() with the real reason is strictly better.
+        /// </remarks>
+        private void DetectCaptiveDependencies()
+        {
+            foreach (var kvp in _registrations)
+            {
+                var registration = kvp.Value;
+
+                if (registration.Lifetime != Lifetime.Singleton ||
+                    registration.Factory != null ||
+                    registration.Instance != null)
+                    continue;
+
+                var constructor = Container.GetBestConstructor(registration.ImplementationType);
+
+                foreach (var param in constructor.GetParameters())
+                {
+                    if (_registrations.TryGetValue(param.ParameterType, out var depReg) &&
+                        depReg.Lifetime == Lifetime.Scoped)
+                    {
+                        throw new InvalidOperationException(
+                            $"Captive dependency: Singleton '{kvp.Key.Name}' cannot depend on Scoped " +
+                            $"'{param.ParameterType.Name}'. Register the dependent as Scoped, or the dependency as Singleton.");
+                    }
+                }
+            }
         }
 
         private static void ValidateType(Type type)

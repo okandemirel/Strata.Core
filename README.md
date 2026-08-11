@@ -46,7 +46,7 @@ Strada combines enterprise-grade dependency injection with performance-critical 
 - **Source Generation**: Compile-time query generation for 9-16 components
 
 ### Messaging ([docs](Documentation~/Messaging.md))
-- **MessageBus**: Unified command/query/event bus with array-indexed dispatch (4ns/dispatch)
+- **MessageBus**: Unified command/query/event bus with array-indexed dispatch (~15-20ns/dispatch)
 - **Pooled Commands**: Execute ICommand objects with automatic pool return
 - **Zero-alloc Publish**: Struct-based messages, no boxing
 - **Exception Isolation**: Handler failures don't interrupt other subscribers
@@ -216,7 +216,7 @@ Measured on Apple Silicon, Unity 6, **Mono, in the Editor**.
 | Wide Service (5 deps) | **0.42μs** | Class with 5 injected dependencies |
 | Singleton Lookup | **61ns** | Already-created singleton |
 | Scoped Lookup | **21ns** | Within existing scope |
-| Container Build (100 types) | **0.05ms** | ~0.5μs per registration |
+| Container Build (100 types) | **~2ms** | ~20μs per registration |
 | **vs Manual `new()`** | **1.56x** | Competitive with best Unity DI |
 
 ### ECS
@@ -401,9 +401,11 @@ Packages/com.strada.core/
 │   ├── StradaFactoryGenerator.cs   # Factory generation
 │   └── EntityQueryGenerator.cs     # Query T9-T16 generation
 ├── Editor/                    # Editor Tools
-└── Tests/                     # Test Suite
-    ├── Runtime/               # Functional Tests (324)
-    └── Performance/           # Benchmarks (93)
+└── Tests/                     # Test Suite (564 tests)
+    ├── Runtime/               # Functional tests (457)
+    │   └── Performance/       # Unity PerformanceTesting benchmarks (85)
+    ├── Benchmarks/            # Scaling benchmarks (18)
+    └── Stress/                # Stress tests (4)
 ```
 
 ---

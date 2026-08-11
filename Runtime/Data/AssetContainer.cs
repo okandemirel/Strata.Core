@@ -27,7 +27,12 @@ namespace Strada.Core.Data
         public AssetRef(T asset)
         {
             _asset = asset;
-            _guid = asset != null ? System.Guid.NewGuid().ToString("N") : string.Empty;
+
+            // The identifier has to be the asset's own. Minting a fresh Guid here meant Guid
+            // could never resolve the asset through RuntimeAssetDatabase (which indexes on
+            // AssetContainer.AssetGuid), and two refs to the same asset disagreed on identity.
+            // It also allocated a Guid plus a 32-char string on every implicit conversion.
+            _guid = asset is AssetContainer container ? container.AssetGuid : string.Empty;
         }
 
         public static implicit operator T(AssetRef<T> assetRef) => assetRef._asset;

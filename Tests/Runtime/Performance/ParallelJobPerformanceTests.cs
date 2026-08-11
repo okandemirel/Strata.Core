@@ -147,7 +147,22 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 _entityManager.AddComponent(entity, new Velocity { X = 1, Y = 2, Z = 3 });
             }
 
-            var swSequential = Stopwatch.StartNew();
+            var job = new MoveJob { DeltaTime = 0.016f };
+
+            // Warm up all three legs before any Stopwatch starts. The managed leg used to run
+            // cold while the job leg was warmed explicitly, so first-call JIT of the closed
+            // generic ForEach<Position, Velocity> and of its delegate was charged to the
+            // comparison's denominator only — bias entirely in the direction of a bigger speedup.
+            _entityManager.ForEach<Position, Velocity>((int e, ref Position t, ref Velocity v) =>
+            {
+                t.X += v.X * 0.016f;
+                t.Y += v.Y * 0.016f;
+                t.Z += v.Z * 0.016f;
+            });
+            _entityManager.ScheduleParallel<MoveJob, Position, Velocity>(job, Count).Complete();
+            _entityManager.ScheduleParallel<MoveJob, Position, Velocity>(job).Complete();
+
+            var swManaged = Stopwatch.StartNew();
             for (int frame = 0; frame < Frames; frame++)
             {
                 _entityManager.ForEach<Position, Velocity>((int e, ref Position t, ref Velocity v) =>
@@ -157,12 +172,18 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                     t.Z += v.Z * 0.016f;
                 });
             }
-            swSequential.Stop();
+            swManaged.Stop();
 
-            var job = new MoveJob { DeltaTime = 0.016f };
-
-            var warmup = _entityManager.ScheduleParallel<MoveJob, Position, Velocity>(job);
-            warmup.Complete();
+            // A batch size equal to the entity count gives IJobParallelFor exactly one batch, so
+            // this leg is the same Burst-compiled job on a single worker. Without it the reported
+            // ratio folds Burst codegen and the elimination of one managed delegate call per
+            // entity into a number labelled "parallel speedup".
+            var swSingleThreaded = Stopwatch.StartNew();
+            for (int frame = 0; frame < Frames; frame++)
+            {
+                _entityManager.ScheduleParallel<MoveJob, Position, Velocity>(job, Count).Complete();
+            }
+            swSingleThreaded.Stop();
 
             var swParallel = Stopwatch.StartNew();
             for (int frame = 0; frame < Frames; frame++)
@@ -171,14 +192,29 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             }
             swParallel.Stop();
 
-            float speedup = (float)swSequential.ElapsedMilliseconds / swParallel.ElapsedMilliseconds;
+            // TotalMilliseconds, not ElapsedMilliseconds: the latter is a whole-millisecond
+            // integer, so a sub-millisecond parallel run made the denominator 0 and the ratio
+            // float.PositiveInfinity — which sails past Assert.Greater and gets published.
+            double managedMs = swManaged.Elapsed.TotalMilliseconds;
+            double singleThreadedMs = swSingleThreaded.Elapsed.TotalMilliseconds;
+            double parallelMs = swParallel.Elapsed.TotalMilliseconds;
 
-            UnityEngine.Debug.Log($"[STRADA BENCHMARK] Sequential vs Parallel ({Count} entities, {Frames} frames):");
-            UnityEngine.Debug.Log($"  Sequential: {swSequential.ElapsedMilliseconds}ms");
-            UnityEngine.Debug.Log($"  Parallel:   {swParallel.ElapsedMilliseconds}ms");
-            UnityEngine.Debug.Log($"  Speedup:    {speedup:F2}x");
+            Assert.Greater(singleThreadedMs, 0.0, "Single-threaded leg produced no measurable time");
+            Assert.Greater(parallelMs, 0.0, "Parallel leg produced no measurable time");
 
-            Assert.Greater(speedup, 1.0f, "Parallel should be faster than sequential");
+            double burstSpeedup = managedMs / singleThreadedMs;
+            double parallelSpeedup = singleThreadedMs / parallelMs;
+            double totalSpeedup = managedMs / parallelMs;
+
+            UnityEngine.Debug.Log($"[STRADA BENCHMARK] Managed vs Burst vs Parallel ({Count} entities, {Frames} frames):");
+            UnityEngine.Debug.Log($"  Managed ForEach:      {managedMs:F2}ms");
+            UnityEngine.Debug.Log($"  Burst, 1 worker:      {singleThreadedMs:F2}ms");
+            UnityEngine.Debug.Log($"  Burst, all workers:   {parallelMs:F2}ms");
+            UnityEngine.Debug.Log($"  Burst vs managed:     {burstSpeedup:F2}x");
+            UnityEngine.Debug.Log($"  Parallel vs 1 worker: {parallelSpeedup:F2}x  <- the actual parallelism figure");
+            UnityEngine.Debug.Log($"  Combined:             {totalSpeedup:F2}x");
+
+            Assert.Greater(totalSpeedup, 1.0, "Parallel Burst should beat the managed delegate loop");
         }
 
         [Test]

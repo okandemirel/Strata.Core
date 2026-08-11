@@ -38,8 +38,8 @@ namespace Strada.Core.Communication
         Strada.Core.SubscriptionToken RegisterSignalHandler<TSignal>(ISignalHandler<TSignal> handler) where TSignal : struct;
         bool HasSignalHandler<TSignal>() where TSignal : struct;
         ValueTask SendAsync<TSignal>(TSignal signal, CancellationToken cancellationToken = default) where TSignal : struct;
-        void RegisterAsyncSignalHandler<TSignal>(IAsyncSignalHandler<TSignal> handler) where TSignal : struct;
-        void RegisterAsyncSignalHandler<TSignal>(Func<TSignal, CancellationToken, ValueTask> handler) where TSignal : struct;
+        Strada.Core.SubscriptionToken RegisterAsyncSignalHandler<TSignal>(IAsyncSignalHandler<TSignal> handler) where TSignal : struct;
+        Strada.Core.SubscriptionToken RegisterAsyncSignalHandler<TSignal>(Func<TSignal, CancellationToken, ValueTask> handler) where TSignal : struct;
     }
 
     /// <summary>
@@ -52,8 +52,8 @@ namespace Strada.Core.Communication
         Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(IQueryHandler<TQuery, TResult> handler) where TQuery : struct, IQuery<TResult>;
         Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler) where TQuery : struct, IQuery<TResult>;
         ValueTask<TResult> QueryAsync<TQuery, TResult>(TQuery query, CancellationToken cancellationToken = default) where TQuery : struct, IAsyncQuery<TResult>;
-        void RegisterAsyncQueryHandler<TQuery, TResult>(IAsyncQueryHandler<TQuery, TResult> handler) where TQuery : struct, IAsyncQuery<TResult>;
-        void RegisterAsyncQueryHandler<TQuery, TResult>(Func<TQuery, CancellationToken, ValueTask<TResult>> handler) where TQuery : struct, IAsyncQuery<TResult>;
+        Strada.Core.SubscriptionToken RegisterAsyncQueryHandler<TQuery, TResult>(IAsyncQueryHandler<TQuery, TResult> handler) where TQuery : struct, IAsyncQuery<TResult>;
+        Strada.Core.SubscriptionToken RegisterAsyncQueryHandler<TQuery, TResult>(Func<TQuery, CancellationToken, ValueTask<TResult>> handler) where TQuery : struct, IAsyncQuery<TResult>;
     }
 
     /// <summary>
@@ -90,7 +90,11 @@ namespace Strada.Core.Communication
         private object[] _eventChannels = new object[64];
         private object[] _asyncSignalHandlers = new object[64];
         private object[] _asyncQueryHandlers = new object[64];
-        private bool _disposed;
+
+        // Written by Dispose on one thread and read by every dispatch on others; without
+        // volatile the JIT may hoist the read out of a loop and keep dispatching into a
+        // disposed bus. Matches Container._disposed.
+        private volatile bool _disposed;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Send<TSignal>(ref TSignal signal) where TSignal : struct
@@ -99,9 +103,13 @@ namespace Strada.Core.Communication
 
             var id = SignalTypeId<TSignal>.Id;
             var handlers = Volatile.Read(ref _signalHandlers);
-            if (id < handlers.Length && handlers[id] != null)
+            // The slot must be loaded exactly once: a concurrent token disposal or Clear()
+            // nulls the element of this very array, so re-reading it after the null test
+            // could hand us a null delegate to invoke.
+            var handler = id < handlers.Length ? handlers[id] as Action<TSignal> : null;
+            if (handler != null)
             {
-                ((Action<TSignal>)handlers[id])(signal);
+                handler(signal);
                 return;
             }
 
@@ -121,8 +129,10 @@ namespace Strada.Core.Communication
 
             var id = QueryTypeId<TQuery>.Id;
             var handlers = Volatile.Read(ref _queryHandlers);
-            if (id < handlers.Length && handlers[id] != null)
-                return ((IQueryHandler<TQuery, TResult>)handlers[id]).Handle(ref query);
+            // Single load of the slot — see Send for why a second read is unsafe.
+            var handler = id < handlers.Length ? handlers[id] as IQueryHandler<TQuery, TResult> : null;
+            if (handler != null)
+                return handler.Handle(ref query);
 
             ThrowHandlerNotFoundException<TQuery>("query");
             return default;
@@ -236,6 +246,17 @@ namespace Strada.Core.Communication
             });
         }
 
+        /// <summary>
+        /// Registers a delegate query handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes it.
+        /// </summary>
+        /// <remarks>
+        /// Note the aliasing difference from the <see cref="IQueryHandler{TQuery,TResult}"/>
+        /// overload: <paramref name="handler"/> receives a <i>copy</i> of the query, so writes
+        /// to it are not visible to a caller of <c>Query(ref TQuery)</c>, whereas an
+        /// <c>IQueryHandler</c> receives the caller's struct by reference and can write through
+        /// to it.
+        /// </remarks>
         public Strada.Core.SubscriptionToken RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)
             where TQuery : struct, IQuery<TResult>
         {
@@ -263,7 +284,11 @@ namespace Strada.Core.Communication
                 if (channel == null)
                 {
                     channel = new EventChannel<TEvent>();
-                    _eventChannels[id] = channel;
+                    // Release store: Publish and GetSubscriberCount read this slot without
+                    // taking _lock, so on a weakly ordered CPU (ARM64 — Android/iOS/Switch)
+                    // a plain store could publish the reference ahead of the channel's own
+                    // field initialisers.
+                    Volatile.Write(ref _eventChannels[id], channel);
                 }
             }
 
@@ -303,8 +328,14 @@ namespace Strada.Core.Communication
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            // The check and the set have to be atomic together, otherwise two threads
+            // disposing concurrently both fall through into Clear().
+            lock (_lock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+            }
+
             Clear();
         }
 
@@ -314,23 +345,44 @@ namespace Strada.Core.Communication
 
             var id = AsyncSignalTypeId<TSignal>.Id;
             var handlers = Volatile.Read(ref _asyncSignalHandlers);
-            if (id < handlers.Length && handlers[id] != null)
+            // Single load of the slot — see Send for why a second read is unsafe.
+            var handler = id < handlers.Length
+                ? handlers[id] as Func<TSignal, CancellationToken, ValueTask>
+                : null;
+            if (handler != null)
             {
-                await ((Func<TSignal, CancellationToken, ValueTask>)handlers[id])(signal, cancellationToken);
+                await handler(signal, cancellationToken);
                 return;
             }
 
             ThrowHandlerNotFoundException<TSignal>("async signal");
         }
 
-        public void RegisterAsyncSignalHandler<TSignal>(IAsyncSignalHandler<TSignal> handler) where TSignal : struct
+        /// <summary>
+        /// Registers an async signal handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes it from the single-handler slot for <typeparamref name="TSignal"/>.
+        /// </summary>
+        public Strada.Core.SubscriptionToken RegisterAsyncSignalHandler<TSignal>(IAsyncSignalHandler<TSignal> handler) where TSignal : struct
         {
-            RegisterAsyncSignalHandler<TSignal>((signal, ct) => handler.HandleAsync(signal, ct));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            // What lands in the slot is this wrapper, not the caller's handler, so the token
+            // has to be built around the local — otherwise its ReferenceEquals guard could
+            // never match and the handler could never be unregistered.
+            Func<TSignal, CancellationToken, ValueTask> wrapper = (signal, ct) => handler.HandleAsync(signal, ct);
+            return RegisterAsyncSignalHandler<TSignal>(wrapper);
         }
 
-        public void RegisterAsyncSignalHandler<TSignal>(Func<TSignal, CancellationToken, ValueTask> handler) where TSignal : struct
+        /// <summary>
+        /// Registers an async signal handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes <paramref name="handler"/> from the single-handler slot for
+        /// <typeparamref name="TSignal"/>. Disposal is race-safe: if a later registration has
+        /// already replaced the slot, the token does not clear it.
+        /// </summary>
+        public Strada.Core.SubscriptionToken RegisterAsyncSignalHandler<TSignal>(Func<TSignal, CancellationToken, ValueTask> handler) where TSignal : struct
         {
             if (_disposed) ThrowDisposed();
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
 
             lock (_lock)
             {
@@ -338,6 +390,18 @@ namespace Strada.Core.Communication
                 EnsureCapacity(ref _asyncSignalHandlers, id);
                 Volatile.Write(ref _asyncSignalHandlers[id], handler);
             }
+
+            return new Strada.Core.SubscriptionToken(() =>
+            {
+                if (_disposed) return;
+                lock (_lock)
+                {
+                    var id = AsyncSignalTypeId<TSignal>.Id;
+                    var arr = _asyncSignalHandlers;
+                    if (id < arr.Length && ReferenceEquals(arr[id], handler))
+                        Volatile.Write(ref arr[id], null);
+                }
+            });
         }
 
         public async ValueTask<TResult> QueryAsync<TQuery, TResult>(TQuery query, CancellationToken cancellationToken = default)
@@ -347,23 +411,42 @@ namespace Strada.Core.Communication
 
             var id = AsyncQueryTypeId<TQuery>.Id;
             var handlers = Volatile.Read(ref _asyncQueryHandlers);
-            if (id < handlers.Length && handlers[id] != null)
-                return await ((Func<TQuery, CancellationToken, ValueTask<TResult>>)handlers[id])(query, cancellationToken);
+            // Single load of the slot — see Send for why a second read is unsafe.
+            var handler = id < handlers.Length
+                ? handlers[id] as Func<TQuery, CancellationToken, ValueTask<TResult>>
+                : null;
+            if (handler != null)
+                return await handler(query, cancellationToken);
 
             ThrowHandlerNotFoundException<TQuery>("async query");
             return default;
         }
 
-        public void RegisterAsyncQueryHandler<TQuery, TResult>(IAsyncQueryHandler<TQuery, TResult> handler)
+        /// <summary>
+        /// Registers an async query handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes it from the single-handler slot for <typeparamref name="TQuery"/>.
+        /// </summary>
+        public Strada.Core.SubscriptionToken RegisterAsyncQueryHandler<TQuery, TResult>(IAsyncQueryHandler<TQuery, TResult> handler)
             where TQuery : struct, IAsyncQuery<TResult>
         {
-            RegisterAsyncQueryHandler<TQuery, TResult>((query, ct) => handler.HandleAsync(query, ct));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+            // The wrapper, not the caller's handler, is what the token must compare against.
+            Func<TQuery, CancellationToken, ValueTask<TResult>> wrapper = (query, ct) => handler.HandleAsync(query, ct);
+            return RegisterAsyncQueryHandler<TQuery, TResult>(wrapper);
         }
 
-        public void RegisterAsyncQueryHandler<TQuery, TResult>(Func<TQuery, CancellationToken, ValueTask<TResult>> handler)
+        /// <summary>
+        /// Registers an async query handler and returns a <see cref="Strada.Core.SubscriptionToken"/>
+        /// whose disposal removes <paramref name="handler"/> from the single-handler slot for
+        /// <typeparamref name="TQuery"/>. Disposal is race-safe: if a later registration has
+        /// already replaced the slot, the token does not clear it.
+        /// </summary>
+        public Strada.Core.SubscriptionToken RegisterAsyncQueryHandler<TQuery, TResult>(Func<TQuery, CancellationToken, ValueTask<TResult>> handler)
             where TQuery : struct, IAsyncQuery<TResult>
         {
             if (_disposed) ThrowDisposed();
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
 
             lock (_lock)
             {
@@ -371,6 +454,18 @@ namespace Strada.Core.Communication
                 EnsureCapacity(ref _asyncQueryHandlers, id);
                 Volatile.Write(ref _asyncQueryHandlers[id], handler);
             }
+
+            return new Strada.Core.SubscriptionToken(() =>
+            {
+                if (_disposed) return;
+                lock (_lock)
+                {
+                    var id = AsyncQueryTypeId<TQuery>.Id;
+                    var arr = _asyncQueryHandlers;
+                    if (id < arr.Length && ReferenceEquals(arr[id], handler))
+                        Volatile.Write(ref arr[id], null);
+                }
+            });
         }
 
         // Static type-id allocators. Each unique closed generic T allocates one id per kind.
@@ -460,19 +555,36 @@ namespace Strada.Core.Communication
 
         private sealed class EventChannel<T>
         {
+            private const int MaxLoggedFailures = 3;
+
             private HandlerSnapshot<T> _snapshot = HandlerSnapshot<T>.Empty;
             private readonly object _lock = new object();
+            private int _consecutiveFailures;
 
             public int Count => Volatile.Read(ref _snapshot).Count;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void Publish(ref T message)
             {
-                // One volatile read yields a consistent (array, count) pair; the snapshot is
-                // never mutated below its own Count once published, so no lock is needed.
+                // This wrapper stays free of exception handling on purpose: RyuJIT refuses to
+                // inline any method containing an EH clause regardless of AggressiveInlining,
+                // so the try/catch lives in PublishCore and publishing to a channel with no
+                // subscribers costs nothing but the snapshot read.
                 var snapshot = Volatile.Read(ref _snapshot);
+                if (snapshot.Count == 0) return;
+
+                PublishCore(snapshot, ref message);
+            }
+
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            private void PublishCore(HandlerSnapshot<T> snapshot, ref T message)
+            {
+                // The snapshot is never mutated below its own Count once published, so the
+                // single volatile read above yields a consistent (array, count) pair and no
+                // lock is needed here.
                 var handlers = snapshot.Handlers;
                 int count = snapshot.Count;
+                bool faulted = false;
 
                 for (int i = 0; i < count; i++)
                 {
@@ -482,9 +594,31 @@ namespace Strada.Core.Communication
                     }
                     catch (Exception ex)
                     {
-                        Debug.LogError($"Exception in event handler: {ex}");
+                        faulted = true;
+                        LogHandlerException(ex);
                     }
                 }
+
+                // A clean publish re-arms the log budget, so an intermittent failure keeps
+                // being reported while a permanently broken handler goes quiet.
+                if (!faulted && _consecutiveFailures != 0)
+                    Volatile.Write(ref _consecutiveFailures, 0);
+            }
+
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            private void LogHandlerException(Exception ex)
+            {
+                // Interpolating the exception itself calls Exception.ToString(), which
+                // materialises the whole stack trace — hundreds of bytes per publish for a
+                // handler that throws every frame. Pay for that once, then log only type and
+                // message, then stop.
+                var failures = Interlocked.Increment(ref _consecutiveFailures);
+                if (failures == 1)
+                    Debug.LogError($"[EventBus] Handler for '{typeof(T).Name}' threw: {ex}");
+                else if (failures <= MaxLoggedFailures)
+                    Debug.LogError($"[EventBus] Handler for '{typeof(T).Name}' threw: {ex.GetType().Name}: {ex.Message}");
+                else if (failures == MaxLoggedFailures + 1)
+                    Debug.LogError($"[EventBus] Handler for '{typeof(T).Name}' keeps throwing; further exceptions suppressed until a publish succeeds.");
             }
 
             public void Subscribe(Action<T> handler)

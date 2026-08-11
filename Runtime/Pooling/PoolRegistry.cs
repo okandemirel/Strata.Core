@@ -49,14 +49,58 @@ namespace Strada.Core.Pooling
         public T Spawn<T>() where T : class
         {
             var pool = Get<T>();
-            return pool?.Spawn();
+            if (pool == null)
+            {
+                LogMissingPool(typeof(T), "Spawn");
+                return null;
+            }
+
+            return pool.Spawn();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Despawn<T>(T instance) where T : class
         {
+            if (instance == null) return;
+
             var pool = Get<T>();
-            pool?.Despawn(instance);
+            if (pool != null)
+            {
+                pool.Despawn(instance);
+                return;
+            }
+
+            DespawnByRuntimeType(instance);
+        }
+
+        /// <summary>
+        /// Slow path for a despawn whose static type argument did not name a registered pool.
+        /// </summary>
+        /// <remarks>
+        /// Get&lt;T&gt; keys on the compile-time type argument, which is inferred from the
+        /// variable at the call site rather than from the object, so returning a pooled object
+        /// through a base-typed or interface-typed variable resolved the wrong key. Both misses
+        /// used to be swallowed by `?.`, silently turning a zero-allocation pooled path into a
+        /// full allocation per spawn with no diagnostic anywhere.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void DespawnByRuntimeType(object instance)
+        {
+            var runtimeType = instance.GetType();
+
+            if (_pools.TryGetValue(runtimeType, out var pool) && pool is IObjectPool nonGeneric
+                && nonGeneric.DespawnObject(instance))
+                return;
+
+            LogMissingPool(runtimeType, "Despawn");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void LogMissingPool(Type requestedType, string operation)
+        {
+            UnityEngine.Debug.LogError(
+                $"PoolRegistry.{operation}: no pool is registered for '{requestedType}'. " +
+                "Register the pool with the same concrete type you spawn and despawn through.");
         }
 
         public void Clear()

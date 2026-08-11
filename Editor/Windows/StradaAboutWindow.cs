@@ -1,6 +1,9 @@
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+// UnityEditor also exposes a legacy PackageInfo type; alias the Package Manager one so the
+// unqualified name below cannot bind to it.
+using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace Strada.Core.Editor.Windows
 {
@@ -10,13 +13,14 @@ namespace Strada.Core.Editor.Windows
     /// </summary>
     public sealed class StradaAboutWindow : EditorWindow
     {
-        private const string PackageJsonPath = "Packages/com.strada.core/package.json";
+        private const string PackageRootFallback = "Packages/com.strada.core";
 
         private static readonly Vector2 WindowSize = new(420, 520);
         private static readonly Color SeparatorColor = new(0.5f, 0.5f, 0.5f, 0.3f);
 
-        private string _version = "1.0.0-alpha.1";
+        private string _version = "unknown";
         private string _unityVersion = "6000.0+";
+        private string _packageRoot = PackageRootFallback;
         private Vector2 _scrollPosition;
         private GUIStyle _headerStyle;
         private GUIStyle _subtitleStyle;
@@ -42,9 +46,24 @@ namespace Strada.Core.Editor.Windows
 
         private void LoadPackageInfo()
         {
-            if (!File.Exists(PackageJsonPath)) return;
+            // "Packages/com.strada.core" is a virtual path: it only exists on disk when the
+            // package is embedded under the project. Installed from a registry or a local
+            // path the files live under Library/PackageCache, so probing the virtual path
+            // finds nothing and the window silently shows stale defaults. PackageInfo knows
+            // the resolved location either way.
+            var packageInfo = PackageInfo.FindForAssembly(typeof(StradaAboutWindow).Assembly);
+            if (packageInfo != null)
+            {
+                if (!string.IsNullOrEmpty(packageInfo.resolvedPath))
+                    _packageRoot = packageInfo.resolvedPath;
+                if (!string.IsNullOrEmpty(packageInfo.version))
+                    _version = packageInfo.version;
+            }
 
-            var json = File.ReadAllText(PackageJsonPath);
+            var packageJsonPath = Path.Combine(_packageRoot, "package.json");
+            if (!File.Exists(packageJsonPath)) return;
+
+            var json = File.ReadAllText(packageJsonPath);
             var versionMatch = System.Text.RegularExpressions.Regex.Match(json, "\"version\":\\s*\"([^\"]+)\"");
             if (versionMatch.Success)
                 _version = versionMatch.Groups[1].Value;
@@ -228,14 +247,17 @@ namespace Strada.Core.Editor.Windows
 
         private void OpenDocumentation(string relativePath)
         {
-            var fullPath = Path.Combine("Packages/com.strada.core", relativePath);
-            if (File.Exists(fullPath))
+            var fullPath = Path.Combine(_packageRoot, relativePath);
+            if (!File.Exists(fullPath))
             {
-                var asset = AssetDatabase.LoadAssetAtPath<TextAsset>(fullPath);
-                if (asset != null)
-                    EditorGUIUtility.PingObject(asset);
-                EditorUtility.RevealInFinder(fullPath);
+                Debug.LogWarning($"[Strada] Documentation file not found: {fullPath}");
+                return;
             }
+
+            // Unity deliberately excludes folders whose name ends in '~' from the
+            // AssetDatabase, so LoadAssetAtPath can never resolve a Documentation~ path.
+            // Hand the resolved absolute path to the OS instead.
+            Application.OpenURL(new System.Uri(Path.GetFullPath(fullPath)).AbsoluteUri);
         }
 
         private void DrawStatistics()

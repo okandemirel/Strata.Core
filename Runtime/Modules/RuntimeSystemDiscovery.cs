@@ -100,8 +100,21 @@ namespace Strada.Core.Modules
             if (_cacheInitialized)
                 return;
 
+            // The flag is only raised once the scan has completed. Setting it first meant a throw
+            // partway through left the cache flagged as ready while holding whatever the loop had
+            // gathered before the failure, and every later call returned those partial results
+            // silently.
+            try
+            {
+                ScanAllAssemblies();
+            }
+            catch
+            {
+                _cachedSystems.Clear();
+                throw;
+            }
+
             _cacheInitialized = true;
-            ScanAllAssemblies();
         }
 
         private static void ScanAllAssemblies()
@@ -132,7 +145,17 @@ namespace Strada.Core.Modules
 
         private static bool ShouldSkipAssembly(Assembly assembly)
         {
+            // GetTypes() on a Reflection.Emit assembly that still has unfinished TypeBuilders
+            // throws NotSupportedException, and the Editor domain routinely hosts such assemblies
+            // (serializer/proxy/property-test generators). ModuleRegistry.DiscoverModules already
+            // skips them for the same reason.
+            if (assembly.IsDynamic)
+                return true;
+
             var name = assembly.GetName().Name;
+            if (string.IsNullOrEmpty(name))
+                return true;
+
             return name.StartsWith("System", StringComparison.Ordinal) ||
                    name.StartsWith("Microsoft", StringComparison.Ordinal) ||
                    name.StartsWith("Unity.", StringComparison.Ordinal) ||
@@ -153,6 +176,16 @@ namespace Strada.Core.Modules
             catch (ReflectionTypeLoadException ex)
             {
                 types = ex.Types.Where(t => t != null).ToArray();
+            }
+            catch (Exception ex)
+            {
+                // GetTypes() can also throw NotSupportedException (dynamic assemblies) or
+                // TypeLoadException/FileNotFoundException (a broken dependency). Those escaped the
+                // iterator and aborted discovery for every remaining assembly; one unreadable
+                // assembly should only cost that assembly.
+                Debug.LogWarning(
+                    $"[RuntimeSystemDiscovery] Skipping assembly '{assembly.GetName().Name}': {ex.Message}");
+                types = Array.Empty<Type>();
             }
 
             foreach (var type in types)

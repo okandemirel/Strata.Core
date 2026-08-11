@@ -62,15 +62,24 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public TView Spawn(Entity entity, Transform parent = null)
         {
-            TView view;
+            TView view = null;
 
-            if (_available.Count > 0)
+            // The pool root is a plain GameObject in the direct-construction path, so a scene
+            // load destroys the pooled instances while the Stack still holds their managed
+            // wrappers. Dereferencing one of those throws MissingReferenceException from an
+            // unrelated spawn call site — skip the corpses and fall through to instantiation.
+            while (_available.Count > 0)
             {
-                view = _available.Pop();
-                _pooled.Remove(view);
+                var candidate = _available.Pop();
+                _pooled.Remove(candidate);
+                if (candidate == null) continue;
+
+                view = candidate;
                 view.gameObject.SetActive(true);
+                break;
             }
-            else
+
+            if (view == null)
             {
                 var go = UnityEngine.Object.Instantiate(_prefab);
                 view = go.GetComponent<TView>();
@@ -82,13 +91,34 @@ namespace Strada.Core.Sync
                 _totalCreated++;
             }
 
-            view.transform.SetParent(parent ?? _activeRoot, false);
+            var viewTransform = view.transform;
+            viewTransform.SetParent(parent ?? _activeRoot, false);
+
+            // SetParent(worldPositionStays: false) preserves the local TRS, and Despawn
+            // reparents the same way, so a reused view carries whatever pose its previous
+            // user left it at. Restore the prefab's pose; the position overload overwrites
+            // the world pose afterwards as it already did.
+            var prefabTransform = _prefab.transform;
+            viewTransform.localPosition = prefabTransform.localPosition;
+            viewTransform.localRotation = prefabTransform.localRotation;
+            viewTransform.localScale = prefabTransform.localScale;
 
             view.Bind(_container, _entityManager, entity);
             _registry?.Register(view, entity);
 
             var entityKey = GetEntityKey(entity);
-            _entityToActiveIndex[entityKey] = _active.Count;
+            if (!_entityToActiveIndex.TryAdd(entityKey, _active.Count))
+            {
+                // The map is one-to-one on the entity key. A second live view for the same
+                // entity hides the first from Despawn(Entity) and used to corrupt the
+                // swap-remove bookkeeping outright; Despawn(TView) now resolves by identity,
+                // but the caller still cannot address both views by entity.
+                StradaLog.LogWarning(
+                    $"ViewPool<{typeof(TView).Name}>: a view is already active for Entity({entity.Index},{entity.Version}). " +
+                    "Despawn(Entity) will only reach the most recently spawned one.",
+                    LogModule.Sync);
+                _entityToActiveIndex[entityKey] = _active.Count;
+            }
             _active.Add(view);
 
             return view;
@@ -122,11 +152,24 @@ namespace Strada.Core.Sync
             _registry?.Unregister(view);
             view.Unbind();
 
-            // O(1) removal using swap-remove pattern
-            if (_entityToActiveIndex.TryGetValue(entityKey, out int index))
+            // O(1) removal using swap-remove pattern, but only once the mapped slot is confirmed
+            // to hold THIS view: two views spawned for one entity share a key, and trusting the
+            // key blindly swap-removes the wrong element and drops a still-active view.
+            int index;
+            if (_entityToActiveIndex.TryGetValue(entityKey, out int mapped)
+                && mapped < _active.Count
+                && ReferenceEquals(_active[mapped], view))
             {
+                index = mapped;
                 _entityToActiveIndex.Remove(entityKey);
+            }
+            else
+            {
+                index = _active.IndexOf(view);
+            }
 
+            if (index >= 0)
+            {
                 int lastIndex = _active.Count - 1;
                 if (index < lastIndex)
                 {
@@ -156,7 +199,7 @@ namespace Strada.Core.Sync
         public void Despawn(Entity entity)
         {
             var entityKey = GetEntityKey(entity);
-            if (_entityToActiveIndex.TryGetValue(entityKey, out int index))
+            if (_entityToActiveIndex.TryGetValue(entityKey, out int index) && index < _active.Count)
             {
                 Despawn(_active[index]);
                 return;

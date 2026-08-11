@@ -30,11 +30,24 @@ namespace Strada.Core.ECS.Core
         private NativeList<int> _recycledIndices;
         private int _nextEntityIndex;
         private int _entityCount;
+        private int _destroyVersion;
         private readonly ComponentStore _store;
         private bool _disposed;
 
         public int EntityCount => _entityCount;
         public ComponentStore Store => _store;
+
+        /// <summary>
+        /// Counter bumped on every entity retirement (a successful <see cref="DestroyEntity"/>
+        /// or a <see cref="Clear"/>).
+        /// </summary>
+        /// <remarks>
+        /// Anything that caches entity handles outside the EntityManager — the ArchetypeManager's
+        /// per-archetype tracking lists, for instance — has no way to learn that a handle it holds
+        /// was destroyed through the EntityManager directly. Comparing this counter against a
+        /// remembered value tells such a cache, in O(1), whether a revalidation sweep is needed.
+        /// </remarks>
+        internal int DestroyVersion => _destroyVersion;
 
         public EntityManager() : this(InitialCapacity) { }
 
@@ -73,7 +86,11 @@ namespace Strada.Core.ECS.Core
             {
                 index = _nextEntityIndex++;
                 EnsureCapacity(index + 1);
-                version = 1;
+                // Not a hard-coded 1: Clear() retires the whole index space by bumping every
+                // version rather than zeroing it, so a "fresh" index may already carry the
+                // version of a previous generation. Restarting at 1 there would re-issue a
+                // handle that is byte-identical to one handed out before the Clear.
+                version = _versions[index] + 1;
             }
 
             _versions[index] = version;
@@ -108,7 +125,9 @@ namespace Strada.Core.ECS.Core
                 else
                 {
                     index = _nextEntityIndex++;
-                    version = 1;
+                    // See CreateEntity: a fresh index can already carry a version left behind
+                    // by Clear(), and reusing 1 would alias a pre-Clear handle.
+                    version = _versions[index] + 1;
                 }
 
                 _versions[index] = version;
@@ -129,6 +148,7 @@ namespace Strada.Core.ECS.Core
             _active[entity.Index] = 0;
             _recycledIndices.Add(entity.Index);
             _entityCount--;
+            _destroyVersion++;
         }
 
         /// <summary>
@@ -252,8 +272,14 @@ namespace Strada.Core.ECS.Core
 
         /// <summary>
         /// Gets all active entity indices. Allocates a managed list for compatibility.
-        /// For performance-critical code, use GetActiveEntitiesNonAlloc instead.
+        /// For performance-critical code, use GetAllEntities(List&lt;int&gt;) or
+        /// GetActiveEntitiesNonAlloc instead.
         /// </summary>
+        /// <remarks>
+        /// Two allocations per call: the list itself, plus a boxed <c>List&lt;int&gt;.Enumerator</c>
+        /// at every foreach, because the declared return type is an interface rather than the
+        /// concrete list.
+        /// </remarks>
         public IEnumerable<int> GetAllEntities()
         {
             var result = new List<int>(_entityCount);
@@ -263,6 +289,27 @@ namespace Strada.Core.ECS.Core
                     result.Add(i);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Fills <paramref name="output"/> with the active entity indices, clearing it first.
+        /// </summary>
+        /// <remarks>
+        /// The <see cref="IEnumerable{T}"/> overload allocates a fresh list per call and, because
+        /// its static type is an interface, boxes <c>List&lt;int&gt;.Enumerator</c> at every
+        /// foreach. A caller that holds on to its list allocates nothing here after the first
+        /// call, and foreach over the caller's List binds the struct enumerator.
+        /// </remarks>
+        public void GetAllEntities(List<int> output)
+        {
+            if (output == null) throw new ArgumentNullException(nameof(output));
+
+            output.Clear();
+            for (int i = 1; i < _nextEntityIndex; i++)
+            {
+                if (_active[i] == 1)
+                    output.Add(i);
+            }
         }
 
         /// <summary>
@@ -289,13 +336,24 @@ namespace Strada.Core.ECS.Core
 
             unsafe
             {
-                UnsafeUtility.MemClear(_versions.GetUnsafePtr(), _versions.Length * sizeof(int));
-                UnsafeUtility.MemClear(_active.GetUnsafePtr(), _active.Length * sizeof(byte));
+                // The size is computed in long: at MaxEntityCapacity the int product would
+                // overflow to a negative byte count.
+                UnsafeUtility.MemClear(_active.GetUnsafePtr(), (long)_active.Length * sizeof(byte));
             }
+
+            // Versions are retired, not zeroed. The version is the only thing distinguishing a
+            // reissued index from the handle that previously held it; wiping it while
+            // _nextEntityIndex restarts at 1 would make the first entity created after this
+            // Clear byte-identical to the first entity ever created, so every stale handle from
+            // before the Clear would pass Exists() against an unrelated new entity.
+            int used = Math.Min(_nextEntityIndex, _versions.Length);
+            for (int i = 1; i < used; i++)
+                _versions[i]++;
 
             _recycledIndices.Clear();
             _nextEntityIndex = 1;
             _entityCount = 0;
+            _destroyVersion++;
         }
 
         public void Dispose()
@@ -399,15 +457,28 @@ namespace Strada.Core.ECS.Core
         public void CaptureState(out int nextEntityIndex, out int[] activeIndices, out int[] versions)
         {
             nextEntityIndex = _nextEntityIndex;
-            
-            var activeList = new List<int>(_entityCount);
+
+            int activeCount = 0;
             for (int i = 1; i < _nextEntityIndex; i++)
             {
-                if (_active[i] == 1) activeList.Add(i);
+                if (_active[i] == 1) activeCount++;
             }
-            activeIndices = activeList.ToArray();
 
-            versions = _versions.ToArray();
+            // Counted first so the array is sized exactly. Building a List and calling ToArray
+            // allocated the active set twice.
+            activeIndices = new int[activeCount];
+            int written = 0;
+            for (int i = 1; i < _nextEntityIndex && written < activeCount; i++)
+            {
+                if (_active[i] == 1) activeIndices[written++] = i;
+            }
+
+            // Only [0, _nextEntityIndex) carries meaning. _versions.ToArray() copied the whole
+            // capacity, which EnsureCapacity doubles and never shrinks — a world that briefly
+            // peaked at 600k entities produced a 4 MB int[] on the large object heap per
+            // snapshot, most of it zeroes.
+            versions = new int[_nextEntityIndex];
+            NativeArray<int>.Copy(_versions, 0, versions, 0, _nextEntityIndex);
         }
     }
 }

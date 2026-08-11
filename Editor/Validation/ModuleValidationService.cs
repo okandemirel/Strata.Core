@@ -95,10 +95,17 @@ namespace Strada.Core.Editor.Validation
             var visited = new HashSet<ModuleConfig>();
             var visiting = new HashSet<ModuleConfig>();
 
+            // One cycle is reachable from every module that leads into it, so report each
+            // distinct cycle once instead of once per entry point.
+            var reportedCycles = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var module in modules)
             {
                 if (HasCycle(module, visited, visiting, enabledSet, out var cyclePath))
                 {
+                    if (!reportedCycles.Add(BuildCycleKey(cyclePath)))
+                        continue;
+
                     var cycleNames = new StringBuilder();
                     for (int i = 0; i < cyclePath.Count; i++)
                     {
@@ -262,6 +269,33 @@ namespace Strada.Core.Editor.Validation
             };
         }
 
+        /// <summary>
+        /// Builds an entry-point-independent identity for a detected cycle.
+        /// </summary>
+        /// <remarks>
+        /// The reported path can carry a tail that merely leads into the cycle (A -> B -> C -> B).
+        /// The cycle proper is the span from the first occurrence of the repeated node, which is
+        /// always the last element of the path.
+        /// </remarks>
+        private static string BuildCycleKey(List<ModuleConfig> cyclePath)
+        {
+            if (cyclePath == null || cyclePath.Count == 0)
+                return string.Empty;
+
+            var repeated = cyclePath[cyclePath.Count - 1];
+            var start = cyclePath.IndexOf(repeated);
+            if (start < 0) start = 0;
+
+            var names = new List<string>();
+            for (int i = start; i < cyclePath.Count - 1; i++)
+            {
+                names.Add(cyclePath[i] != null ? cyclePath[i].ModuleName : "?");
+            }
+
+            names.Sort(StringComparer.Ordinal);
+            return string.Join("|", names);
+        }
+
         private static bool HasCycle(
             ModuleConfig current,
             HashSet<ModuleConfig> visited,
@@ -289,6 +323,11 @@ namespace Strada.Core.Editor.Validation
                     if (HasCycle(dep, visited, visiting, enabledSet, out cyclePath))
                     {
                         cyclePath.Insert(0, current);
+
+                        // Unwind on the cycle path too. Without this, every node on a cycle stays
+                        // in the shared `visiting` set forever, and each later top-level module
+                        // whose DFS reaches one of them reports another (spurious) cycle.
+                        visiting.Remove(current);
                         return true;
                     }
                 }

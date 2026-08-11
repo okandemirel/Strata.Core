@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using Strada.Core.Logging;
 
 namespace Strada.Core.Sync
 {
@@ -11,6 +12,10 @@ namespace Strada.Core.Sync
 
         public T Track<T>(T disposable) where T : IDisposable
         {
+            if (disposable is null) throw new ArgumentNullException(nameof(disposable));
+            // Registering after teardown used to append to a list nothing walks again, leaving
+            // the subscription live and unreachable. Dispose it immediately instead.
+            if (_disposed) { disposable.Dispose(); return disposable; }
             _disposables.Add(disposable);
             return disposable;
         }
@@ -31,13 +36,13 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Subscribe<T>(IReadOnlyReactiveProperty<T> property, Action<T> handler)
         {
-            _disposables.Add(property.Subscribe(handler));
+            Add(property.Subscribe(handler));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void SubscribeAndInvoke<T>(ReactiveProperty<T> property, Action<T> handler)
         {
-            _disposables.Add(property.SubscribeAndInvoke(handler));
+            Add(property.SubscribeAndInvoke(handler));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -46,7 +51,7 @@ namespace Strada.Core.Sync
             Func<TSource, TResult> selector)
         {
             var mapped = source.Select(selector);
-            _disposables.Add(mapped);
+            Add(mapped);
             return mapped;
         }
 
@@ -56,7 +61,7 @@ namespace Strada.Core.Sync
             Func<T, bool> predicate)
         {
             var filtered = source.Where(predicate);
-            _disposables.Add(filtered);
+            Add(filtered);
             return filtered;
         }
 
@@ -67,7 +72,7 @@ namespace Strada.Core.Sync
             Func<T1, T2, TResult> combiner)
         {
             var combined = source1.CombineLatest(source2, combiner);
-            _disposables.Add(combined);
+            Add(combined);
             return combined;
         }
 
@@ -77,7 +82,7 @@ namespace Strada.Core.Sync
             Func<T1, T> computation)
         {
             var computed = ComputedProperty<T>.From(dep1, computation);
-            _disposables.Add(computed);
+            Add(computed);
             return computed;
         }
 
@@ -88,7 +93,7 @@ namespace Strada.Core.Sync
             Func<T1, T2, T> computation)
         {
             var computed = ComputedProperty<T>.From(dep1, dep2, computation);
-            _disposables.Add(computed);
+            Add(computed);
             return computed;
         }
 
@@ -98,7 +103,7 @@ namespace Strada.Core.Sync
             ReactiveProperty<T> target)
         {
             var binding = new TwoWayBinding<T>(source, target);
-            _disposables.Add(binding);
+            Add(binding);
             return binding;
         }
 
@@ -110,7 +115,7 @@ namespace Strada.Core.Sync
             Func<TTarget, TSource> toSource)
         {
             var binding = new TwoWayBinding<TSource, TTarget>(source, target, toTarget, toSource);
-            _disposables.Add(binding);
+            Add(binding);
             return binding;
         }
 
@@ -119,10 +124,30 @@ namespace Strada.Core.Sync
             if (_disposed) return;
             _disposed = true;
 
-            // LIFO disposal so later-acquired tokens release before earlier ones.
-            for (int i = _disposables.Count - 1; i >= 0; i--)
-                _disposables[i].Dispose();
-            _disposables.Clear();
+            try
+            {
+                // LIFO disposal so later-acquired tokens release before earlier ones.
+                // Each disposal is isolated: _disposed is already true, so one throwing
+                // disposable used to abort the loop and leave every earlier entry subscribed
+                // forever, with no second chance because Dispose returns early from then on.
+                for (int i = _disposables.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        _disposables[i].Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        StradaLog.LogError(
+                            $"BindingScope: a tracked disposable threw during scope teardown: {ex}",
+                            LogModule.Sync);
+                    }
+                }
+            }
+            finally
+            {
+                _disposables.Clear();
+            }
         }
     }
 
@@ -276,9 +301,12 @@ namespace Strada.Core.Sync
                 _onInvalid?.Invoke(value);
                 return;
             }
+            // Assigning Value runs every subscriber of the target synchronously. Without the
+            // finally, one throwing subscriber leaves _updating latched true and the binding
+            // silently dead for the rest of the session.
             _updating = true;
-            _target.Value = value;
-            _updating = false;
+            try { _target.Value = value; }
+            finally { _updating = false; }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -291,8 +319,8 @@ namespace Strada.Core.Sync
                 return;
             }
             _updating = true;
-            _source.Value = value;
-            _updating = false;
+            try { _source.Value = value; }
+            finally { _updating = false; }
         }
 
         public void Dispose()

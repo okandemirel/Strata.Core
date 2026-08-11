@@ -28,6 +28,19 @@ namespace Strada.Core.Editor.Inspectors
         private IReadOnlyList<IComponentBinding> _bindings;
         private MethodInfo _syncMethod;
         private MethodInfo _pushMethod;
+        private PropertyInfo _isBoundProperty;
+        private PropertyInfo _bindingsProperty;
+
+        // The reflection results depend only on the type, and this inspector repaints every
+        // editor frame in Play Mode, so resolving them per repaint was pure waste.
+        private Type _resolvedMediatorType;
+        private static readonly Dictionary<Type, FieldInfo> MediatorFieldByViewType =
+            new Dictionary<Type, FieldInfo>();
+
+        private static GUIStyle _miniLabelStyle;
+
+        private double _lastRepaintTime;
+        private const double RepaintIntervalSeconds = 0.05;
 
         public override void OnInspectorGUI()
         {
@@ -58,56 +71,66 @@ namespace Strada.Core.Editor.Inspectors
 
             _mediator = FindMediatorForView(view);
 
-            if (_mediator != null)
+            if (_mediator == null)
             {
-                var bindingsProperty = _mediator.GetType().GetProperty("Bindings", 
-                    BindingFlags.Public | BindingFlags.Instance);
-                if (bindingsProperty != null)
-                {
-                    _bindings = bindingsProperty.GetValue(_mediator) as IReadOnlyList<IComponentBinding>;
-                }
+                _bindings = null;
+                return;
+            }
 
-                _syncMethod = _mediator.GetType().GetMethod("SyncBindings", 
+            var mediatorType = _mediator.GetType();
+            if (mediatorType != _resolvedMediatorType)
+            {
+                _resolvedMediatorType = mediatorType;
+                _bindingsProperty = mediatorType.GetProperty("Bindings",
                     BindingFlags.Public | BindingFlags.Instance);
-                _pushMethod = _mediator.GetType().GetMethod("PushBindings", 
+                _isBoundProperty = mediatorType.GetProperty("IsBound",
+                    BindingFlags.Public | BindingFlags.Instance);
+                _syncMethod = mediatorType.GetMethod("SyncBindings",
+                    BindingFlags.Public | BindingFlags.Instance);
+                _pushMethod = mediatorType.GetMethod("PushBindings",
                     BindingFlags.Public | BindingFlags.Instance);
             }
+
+            _bindings = _bindingsProperty?.GetValue(_mediator) as IReadOnlyList<IComponentBinding>;
         }
 
         private object FindMediatorForView(View view)
         {
-            var registryType = Type.GetType("Strada.Core.Sync.MediatorRegistry, Strada.Core");
-            if (registryType != null)
+            // There is deliberately no MediatorRegistry lookup here. MediatorRegistry exposes no
+            // static Instance and no GetMediatorForView, so the registry branch that used to sit
+            // in front of this was unreachable and only cost a Type.GetType plus two member
+            // lookups per repaint. Restore it only alongside a real registry API.
+            var viewType = view.GetType();
+
+            if (!MediatorFieldByViewType.TryGetValue(viewType, out var mediatorField))
             {
-                var instanceProperty = registryType.GetProperty("Instance", 
-                    BindingFlags.Public | BindingFlags.Static);
-                if (instanceProperty != null)
+                var fields = viewType.GetFields(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
+                foreach (var field in fields)
                 {
-                    var registry = instanceProperty.GetValue(null);
-                    if (registry != null)
+                    // An assignability test, not a Name.Contains("Mediator") substring match:
+                    // the latter binds to unrelated fields such as _mediatorPrefab.
+                    if (IsEntityMediatorType(field.FieldType))
                     {
-                        var getMediatorMethod = registryType.GetMethod("GetMediatorForView",
-                            BindingFlags.Public | BindingFlags.Instance);
-                        if (getMediatorMethod != null)
-                        {
-                            return getMediatorMethod.Invoke(registry, new object[] { view });
-                        }
+                        mediatorField = field;
+                        break;
                     }
                 }
+
+                MediatorFieldByViewType[viewType] = mediatorField;
             }
 
-            var viewType = view.GetType();
-            var fields = viewType.GetFields(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
-            foreach (var field in fields)
+            return mediatorField?.GetValue(view);
+        }
+
+        private static bool IsEntityMediatorType(Type type)
+        {
+            for (var current = type; current != null; current = current.BaseType)
             {
-                if (field.FieldType.Name.Contains("Mediator") || 
-                    field.FieldType.BaseType?.Name.Contains("EntityMediator") == true)
-                {
-                    return field.GetValue(view);
-                }
+                if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(EntityMediator<>))
+                    return true;
             }
 
-            return null;
+            return false;
         }
 
         private void DrawMediatorSection()
@@ -117,9 +140,7 @@ namespace Strada.Core.Editor.Inspectors
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("EntityMediator", EditorStyles.boldLabel);
 
-            var isBoundProperty = _mediator.GetType().GetProperty("IsBound",
-                BindingFlags.Public | BindingFlags.Instance);
-            bool isBound = isBoundProperty != null && (bool)isBoundProperty.GetValue(_mediator);
+            bool isBound = _isBoundProperty != null && (bool)_isBoundProperty.GetValue(_mediator);
 
             DrawColoredMiniLabel(isBound ? "Bound" : "Not Bound", isBound ? SyncedColor : NotSyncedColor, GUILayout.Width(60));
 
@@ -200,9 +221,14 @@ namespace Strada.Core.Editor.Inspectors
 
         private static void DrawColoredMiniLabel(string text, Color color, params GUILayoutOption[] options)
         {
-            var style = new GUIStyle(EditorStyles.miniLabel);
-            style.normal.textColor = color;
-            EditorGUILayout.LabelField(text, style, options);
+            // Reused rather than allocated per call: this runs at least twice per binding per
+            // repaint, and the inspector repaints continuously in Play Mode. Created lazily
+            // because EditorStyles is not available during static initialisation.
+            if (_miniLabelStyle == null)
+                _miniLabelStyle = new GUIStyle(EditorStyles.miniLabel);
+
+            _miniLabelStyle.normal.textColor = color;
+            EditorGUILayout.LabelField(text, _miniLabelStyle, options);
         }
 
         private Color GetStatusColor(BindingSyncState state)
@@ -218,7 +244,17 @@ namespace Strada.Core.Editor.Inspectors
 
         public override bool RequiresConstantRepaint()
         {
-            return Application.isPlaying && _mediator != null;
+            if (!Application.isPlaying || _mediator == null)
+                return false;
+
+            // Gated to ~20 Hz. Every repaint walks the binding list and re-reads the mediator
+            // through reflection, and a debug read-out does not need one frame of latency.
+            var now = EditorApplication.timeSinceStartup;
+            if (now - _lastRepaintTime < RepaintIntervalSeconds)
+                return false;
+
+            _lastRepaintTime = now;
+            return true;
         }
     }
 }

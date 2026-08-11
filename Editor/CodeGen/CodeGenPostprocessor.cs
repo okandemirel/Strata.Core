@@ -29,14 +29,26 @@ namespace Strada.Core.Editor.CodeGen
             if (EditorApplication.timeSinceStartup - _lastProcessTime < DEBOUNCE_SECONDS)
                 return;
 
+            // deletedAssets is deliberately not concatenated here: those paths no longer exist on
+            // disk, so File.ReadAllText below would throw during the import callback. A deleted
+            // .cs is handled separately as an unconditional regenerate signal.
             var allChangedPaths = importedAssets
-                .Concat(deletedAssets)
                 .Concat(movedAssets)
                 .ToArray();
 
             bool shouldRegenerate = false;
             bool moduleConfigChanged = false;
             bool systemClassChanged = false;
+
+            foreach (var path in deletedAssets)
+            {
+                if (path.EndsWith(".cs") && !path.Contains("Generated") && path.StartsWith("Assets/"))
+                {
+                    systemClassChanged = true;
+                    shouldRegenerate = true;
+                    break;
+                }
+            }
 
             foreach (var path in allChangedPaths)
             {
@@ -52,13 +64,30 @@ namespace Strada.Core.Editor.CodeGen
                     }
                 }
 
+                // Once the flag is set the answer cannot change, so stop paying the read cost
+                // for the rest of the batch.
+                if (systemClassChanged)
+                    continue;
+
                 if (path.EndsWith(".cs") && !path.Contains("Generated"))
                 {
-                    if (path.StartsWith("Assets/"))
+                    if (path.StartsWith("Assets/") && File.Exists(path))
                     {
-                        var content = File.ReadAllText(path);
-                        if (content.Contains("[StradaSystem") || content.Contains("[Strada.Core"))
+                        try
                         {
+                            var content = File.ReadAllText(path);
+                            if (content.Contains("[StradaSystem") ||
+                                content.Contains("[SystemOrder") ||
+                                content.Contains("[Strada.Core"))
+                            {
+                                systemClassChanged = true;
+                                shouldRegenerate = true;
+                            }
+                        }
+                        catch (IOException)
+                        {
+                            // The file is still being written by an external tool. Regenerating is
+                            // cheap and always safe, so assume it is relevant rather than skipping.
                             systemClassChanged = true;
                             shouldRegenerate = true;
                         }

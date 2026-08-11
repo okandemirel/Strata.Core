@@ -10,7 +10,14 @@ namespace Strada.Core.Sync
     public sealed class ViewRegistry : IDisposable
     {
         private readonly Dictionary<long, EntityView> _entityToView = new(256);
-        private readonly HashSet<EntityView> _allViews = new(256);
+        // Keyed on managed identity. UnityEngine.Object's Equals treats any two destroyed
+        // objects as equal, so the default comparer can collapse distinct dead views onto one
+        // another and remove the wrong entry.
+        private readonly HashSet<EntityView> _allViews = new(256, ViewIdentityComparer.Instance);
+        // The entity key each view was registered under. Unregister cannot recompute it from
+        // view.Entity, because a view whose GameObject was destroyed has already been unbound
+        // and its Entity reset to default — the key would be wrong and the map would leak.
+        private readonly Dictionary<EntityView, long> _viewToKey = new(256, ViewIdentityComparer.Instance);
         private readonly EntityManager _entityManager;
         private readonly IContainer _container;
         private bool _disposed;
@@ -40,6 +47,15 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static long GetEntityKey(Entity entity) => ((long)entity.Index << 32) | (uint)entity.Version;
 
+        private sealed class ViewIdentityComparer : IEqualityComparer<EntityView>
+        {
+            public static readonly ViewIdentityComparer Instance = new ViewIdentityComparer();
+
+            public bool Equals(EntityView x, EntityView y) => ReferenceEquals(x, y);
+
+            public int GetHashCode(EntityView obj) => RuntimeHelpers.GetHashCode(obj);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Register(EntityView view, Entity entity)
         {
@@ -51,7 +67,14 @@ namespace Strada.Core.Sync
                 view.Bind(_container, _entityManager, entity);
             }
 
-            _entityToView[GetEntityKey(entity)] = view;
+            var key = GetEntityKey(entity);
+            // Re-registering a view under a different entity has to drop its previous key,
+            // or _entityToView keeps resolving the old entity to this view forever.
+            if (_viewToKey.TryGetValue(view, out var previousKey) && previousKey != key)
+                _entityToView.Remove(previousKey);
+
+            _entityToView[key] = view;
+            _viewToKey[view] = key;
             _allViews.Add(view);
             _cacheInvalid = true;
         }
@@ -60,11 +83,16 @@ namespace Strada.Core.Sync
         public void Unregister(EntityView view)
         {
             if (_disposed) return;
-            if (view == null) return;
+            // ReferenceEquals, not ==: UnityEngine.Object's operator== reports true for a live
+            // managed wrapper whose native object was destroyed, and _allViews keys on the
+            // managed instance. Returning here left destroyed views in the registry forever,
+            // walked by every SyncAll.
+            if (ReferenceEquals(view, null)) return;
 
-            if (view.IsBound)
+            if (_viewToKey.TryGetValue(view, out var key))
             {
-                _entityToView.Remove(GetEntityKey(view.Entity));
+                _entityToView.Remove(key);
+                _viewToKey.Remove(view);
             }
 
             if (_allViews.Remove(view))
@@ -82,6 +110,7 @@ namespace Strada.Core.Sync
             if (_entityToView.TryGetValue(key, out var view))
             {
                 _entityToView.Remove(key);
+                _viewToKey.Remove(view);
                 if (_allViews.Remove(view))
                 {
                     _cacheInvalid = true;
@@ -152,10 +181,14 @@ namespace Strada.Core.Sync
         {
             foreach (var view in _allViews)
             {
-                view.Unbind();
+                // A view whose GameObject was destroyed is still a live managed instance here,
+                // and calling into it would throw MissingReferenceException mid-teardown.
+                if (view != null)
+                    view.Unbind();
             }
 
             _entityToView.Clear();
+            _viewToKey.Clear();
             _allViews.Clear();
             _cacheInvalid = true;
         }

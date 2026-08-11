@@ -4,6 +4,27 @@ using Unity.Jobs;
 
 namespace Strada.Core.ECS.Jobs
 {
+    /// <summary>
+    /// Schedules <see cref="ComponentJobParallel{TJob, T1}"/> and its higher-arity siblings over
+    /// component storages.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>AOT / IL2CPP: every concrete job must be registered.</b> The jobs scheduled here
+    /// are generic, and their only construction site is inside these generic methods, which are in
+    /// turn reached only through further generic methods
+    /// (<c>EntityManagerJobExtensions.ScheduleParallel</c>, <c>JobSystemBase.ScheduleParallel</c>,
+    /// <c>BurstSystem.OnSchedule</c>). Burst's AOT compiler discovers generic job instantiations by
+    /// static analysis of concrete <c>new Job&lt;A, B&gt;()</c> expressions; an instantiation that
+    /// exists only through a generic method's type parameters is invisible to it and is silently
+    /// left uncompiled — the job still runs on a player build, just as managed IL2CPP code at a
+    /// fraction of the speed the Editor measurement suggests.</para>
+    /// <para>Declare each concrete combination once, anywhere in the assembly that defines the job:
+    /// <code>
+    /// [assembly: Unity.Jobs.RegisterGenericJobType(
+    ///     typeof(Strada.Core.ECS.Jobs.ComponentJobParallel&lt;MoveJob, Position, Velocity&gt;))]
+    /// </code>
+    /// </para>
+    /// </remarks>
     public static class EntityJobs
     {
         public const int DefaultBatchSize = 64;

@@ -61,15 +61,23 @@ namespace Strada.Core.Data
             var guid = asset.AssetGuid;
             _assets[guid] = asset;
 
-            var type = asset.GetType();
-            if (!_assetsByType.TryGetValue(type, out var list))
+            // Bucket the asset under every AssetContainer type it satisfies, not just its leaf
+            // type. GetAll<T> looks up typeof(T), so indexing only the concrete type made any
+            // base-typed query — including the natural GetAll<AssetContainer>() — return an
+            // empty sequence instead of failing loudly.
+            for (var type = asset.GetType();
+                 type != null && typeof(AssetContainer).IsAssignableFrom(type);
+                 type = type.BaseType)
             {
-                list = new List<AssetContainer>();
-                _assetsByType[type] = list;
-            }
+                if (!_assetsByType.TryGetValue(type, out var list))
+                {
+                    list = new List<AssetContainer>();
+                    _assetsByType[type] = list;
+                }
 
-            if (!list.Contains(asset))
-                list.Add(asset);
+                if (!list.Contains(asset))
+                    list.Add(asset);
+            }
         }
 
         public void Unregister(string guid)
@@ -79,9 +87,14 @@ namespace Strada.Core.Data
 
             _assets.Remove(guid);
 
-            var type = asset.GetType();
-            if (_assetsByType.TryGetValue(type, out var list))
-                list.Remove(asset);
+            // Mirror Register: the asset sits in one bucket per assignable type.
+            for (var type = asset.GetType();
+                 type != null && typeof(AssetContainer).IsAssignableFrom(type);
+                 type = type.BaseType)
+            {
+                if (_assetsByType.TryGetValue(type, out var list))
+                    list.Remove(asset);
+            }
         }
 
         public void Clear()

@@ -185,13 +185,19 @@ namespace Strada.Core.Editor.PropertyDrawers
             float typeWidth = (position.width - EnabledToggleWidth - ArrowWidth - LifetimeWidth - Spacing * 4) / 2;
 
             var interfaceRect = new Rect(toggleRect.xMax + Spacing, position.y, typeWidth, position.height);
-            DrawTypeField(interfaceRect, interfaceTypeProp, enabledProp.boolValue);
+            DrawTypeField(interfaceRect, interfaceTypeProp, enabledProp.boolValue, interfacesOnly: true);
 
             var arrowRect = new Rect(interfaceRect.xMax, position.y, ArrowWidth, position.height);
             EditorGUI.LabelField(arrowRect, "→", EditorStyles.centeredGreyMiniLabel);
 
+            // The implementation slot only ever accepts something that implements the selected
+            // interface, so constrain the menu to that instead of offering every type in the
+            // project.
+            var selectedInterface = ResolveType(interfaceTypeProp);
+
             var implRect = new Rect(arrowRect.xMax, position.y, typeWidth, position.height);
-            DrawTypeField(implRect, implementationTypeProp, enabledProp.boolValue);
+            DrawTypeField(implRect, implementationTypeProp, enabledProp.boolValue,
+                interfacesOnly: false, requiredBase: selectedInterface);
 
             var lifetimeRect = new Rect(implRect.xMax + Spacing, position.y, LifetimeWidth, position.height);
             EditorGUI.PropertyField(lifetimeRect, lifetimeProp, GUIContent.none);
@@ -199,7 +205,17 @@ namespace Strada.Core.Editor.PropertyDrawers
             EditorGUI.EndProperty();
         }
 
-        private void DrawTypeField(Rect rect, SerializedProperty typeProp, bool enabled)
+        private static System.Type ResolveType(SerializedProperty typeProp)
+        {
+            var nameProp = typeProp?.FindPropertyRelative("_assemblyQualifiedName");
+            if (nameProp == null || string.IsNullOrEmpty(nameProp.stringValue))
+                return null;
+
+            return System.Type.GetType(nameProp.stringValue);
+        }
+
+        private void DrawTypeField(Rect rect, SerializedProperty typeProp, bool enabled,
+            bool interfacesOnly, System.Type requiredBase = null)
         {
             var assemblyQualifiedNameProp = typeProp.FindPropertyRelative("_assemblyQualifiedName");
             var typeName = "(None)";
@@ -217,23 +233,28 @@ namespace Strada.Core.Editor.PropertyDrawers
 
             if (EditorGUI.DropdownButton(rect, new GUIContent(typeName), FocusType.Keyboard))
             {
-                ShowTypeMenu(rect, assemblyQualifiedNameProp, typeof(object));
+                ShowTypeMenu(rect, assemblyQualifiedNameProp, interfacesOnly, requiredBase);
             }
 
             GUI.color = previousColor;
         }
 
-        private void ShowTypeMenu(Rect position, SerializedProperty property, System.Type baseType)
+        private static System.Collections.Generic.List<System.Type> _cachedTypes;
+
+        /// <summary>
+        /// All user-assembly interfaces and concrete classes, scanned once.
+        /// </summary>
+        /// <remarks>
+        /// This used to run a full AppDomain scan - GetTypes() on every user assembly - on every
+        /// dropdown click. The set can only change on a domain reload, which clears this static.
+        /// </remarks>
+        private static System.Collections.Generic.List<System.Type> GetCandidateTypes()
         {
-            var menu = new GenericMenu();
-            menu.AddItem(new GUIContent("(None)"), string.IsNullOrEmpty(property.stringValue), () =>
-            {
-                property.stringValue = "";
-                property.serializedObject.ApplyModifiedProperties();
-            });
-            menu.AddSeparator("");
+            if (_cachedTypes != null)
+                return _cachedTypes;
 
             var types = new System.Collections.Generic.List<System.Type>();
+
             foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
             {
                 if (assembly.IsDynamic)
@@ -254,37 +275,58 @@ namespace Strada.Core.Editor.PropertyDrawers
                 {
                     foreach (var type in assembly.GetTypes())
                     {
-                        if (type.IsClass && !type.IsAbstract && baseType.IsAssignableFrom(type))
-                        {
-                            types.Add(type);
-                        }
-                        else if (type.IsInterface && type.Namespace != null && !type.Namespace.StartsWith("System"))
-                        {
-                            types.Add(type);
-                        }
+                        AddCandidate(types, type);
                     }
                 }
                 catch (System.Reflection.ReflectionTypeLoadException ex)
                 {
                     foreach (var type in ex.Types)
                     {
-                        if (type == null) continue;
-                        if (type.IsClass && !type.IsAbstract && baseType.IsAssignableFrom(type))
-                        {
-                            types.Add(type);
-                        }
-                        else if (type.IsInterface && type.Namespace != null && !type.Namespace.StartsWith("System"))
-                        {
-                            types.Add(type);
-                        }
+                        AddCandidate(types, type);
                     }
                 }
                 catch { }
             }
 
-            var grouped = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Type>>();
-            foreach (var type in types)
+            _cachedTypes = types;
+            return _cachedTypes;
+        }
+
+        private static void AddCandidate(System.Collections.Generic.List<System.Type> types, System.Type type)
+        {
+            if (type == null) return;
+
+            if (type.IsInterface)
             {
+                if (type.Namespace == null || !type.Namespace.StartsWith("System", System.StringComparison.Ordinal))
+                    types.Add(type);
+                return;
+            }
+
+            if (type.IsClass && !type.IsAbstract)
+                types.Add(type);
+        }
+
+        private void ShowTypeMenu(Rect position, SerializedProperty property,
+            bool interfacesOnly, System.Type requiredBase)
+        {
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("(None)"), string.IsNullOrEmpty(property.stringValue), () =>
+            {
+                property.stringValue = "";
+                property.serializedObject.ApplyModifiedProperties();
+            });
+            menu.AddSeparator("");
+
+            var grouped = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Type>>();
+            foreach (var type in GetCandidateTypes())
+            {
+                if (interfacesOnly != type.IsInterface)
+                    continue;
+
+                if (requiredBase != null && !requiredBase.IsAssignableFrom(type))
+                    continue;
+
                 var ns = type.Namespace ?? "Global";
                 if (!grouped.TryGetValue(ns, out var list))
                 {
@@ -294,30 +336,12 @@ namespace Strada.Core.Editor.PropertyDrawers
                 list.Add(type);
             }
 
-            menu.AddDisabledItem(new GUIContent("--- Interfaces ---"));
-            foreach (var kvp in grouped)
-            {
-                foreach (var type in kvp.Value)
-                {
-                    if (!type.IsInterface) continue;
-                    var menuPath = string.IsNullOrEmpty(kvp.Key) ? type.Name : $"{kvp.Key}/{type.Name}";
-                    var isSelected = property.stringValue == type.AssemblyQualifiedName;
-                    menu.AddItem(new GUIContent(menuPath), isSelected, () =>
-                    {
-                        property.stringValue = type.AssemblyQualifiedName;
-                        property.serializedObject.ApplyModifiedProperties();
-                    });
-                }
-            }
-
-            menu.AddSeparator("");
-            menu.AddDisabledItem(new GUIContent("--- Classes ---"));
+            menu.AddDisabledItem(new GUIContent(interfacesOnly ? "--- Interfaces ---" : "--- Classes ---"));
 
             foreach (var kvp in grouped)
             {
                 foreach (var type in kvp.Value)
                 {
-                    if (type.IsInterface) continue;
                     var menuPath = string.IsNullOrEmpty(kvp.Key) ? type.Name : $"{kvp.Key}/{type.Name}";
                     var isSelected = property.stringValue == type.AssemblyQualifiedName;
                     menu.AddItem(new GUIContent(menuPath), isSelected, () =>

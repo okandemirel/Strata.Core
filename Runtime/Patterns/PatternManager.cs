@@ -43,10 +43,17 @@ namespace Strada.Core.Patterns
 
             _controllers.Add(controller);
 
+            var alreadyFixedTicked = false;
             if (controller is IFixedTickController fixedController)
+            {
                 _fixedControllers.Add(fixedController);
+                alreadyFixedTicked = true;
+            }
 
-            RegisterTickables(controller);
+            // IFixedTickController.FixedTick(float) and IFixedTickable.FixedTick(float) are the
+            // same signature, so one C# method satisfies both interfaces. Registering the
+            // controller in both lists made OnFixedUpdate invoke it twice per physics step.
+            RegisterTickables(controller, alreadyFixedTicked);
         }
 
         /// <summary>
@@ -63,12 +70,12 @@ namespace Strada.Core.Patterns
             RegisterTickables(service);
         }
 
-        private void RegisterTickables(object component)
+        private void RegisterTickables(object component, bool skipFixedTickable = false)
         {
             if (component is ITickable tickable)
                 _tickables.Add(tickable);
 
-            if (component is IFixedTickable fixedTickable)
+            if (!skipFixedTickable && component is IFixedTickable fixedTickable)
                 _fixedTickables.Add(fixedTickable);
 
             if (component is ILateTickable lateTickable)
@@ -127,8 +134,9 @@ namespace Strada.Core.Patterns
         {
             for (int i = 0; i < _tickables.Count; i++)
             {
-                try { _tickables[i].Tick(deltaTime); }
-                catch (Exception ex) { UnityEngine.Debug.LogError($"Exception in pattern update: {ex}"); }
+                var tickable = _tickables[i];
+                try { tickable.Tick(deltaTime); }
+                catch (Exception ex) { LogComponentException(tickable, "Tick", ex); }
             }
         }
 
@@ -136,14 +144,16 @@ namespace Strada.Core.Patterns
         {
             for (int i = 0; i < _fixedControllers.Count; i++)
             {
-                try { _fixedControllers[i].FixedTick(fixedDeltaTime); }
-                catch (Exception ex) { UnityEngine.Debug.LogError($"Exception in pattern update: {ex}"); }
+                var controller = _fixedControllers[i];
+                try { controller.FixedTick(fixedDeltaTime); }
+                catch (Exception ex) { LogComponentException(controller, "FixedTick", ex); }
             }
 
             for (int i = 0; i < _fixedTickables.Count; i++)
             {
-                try { _fixedTickables[i].FixedTick(fixedDeltaTime); }
-                catch (Exception ex) { UnityEngine.Debug.LogError($"Exception in pattern update: {ex}"); }
+                var fixedTickable = _fixedTickables[i];
+                try { fixedTickable.FixedTick(fixedDeltaTime); }
+                catch (Exception ex) { LogComponentException(fixedTickable, "FixedTick", ex); }
             }
         }
 
@@ -151,9 +161,27 @@ namespace Strada.Core.Patterns
         {
             for (int i = 0; i < _lateTickables.Count; i++)
             {
-                try { _lateTickables[i].LateTick(deltaTime); }
-                catch (Exception ex) { UnityEngine.Debug.LogError($"Exception in pattern update: {ex}"); }
+                var lateTickable = _lateTickables[i];
+                try { lateTickable.LateTick(deltaTime); }
+                catch (Exception ex) { LogComponentException(lateTickable, "LateTick", ex); }
             }
+        }
+
+        /// <summary>
+        /// Reports a failure from a registered component.
+        /// </summary>
+        /// <remarks>
+        /// The message names the offending type — with dozens of registered tickables the old
+        /// text identified none of them. The exception goes through Debug.LogException rather
+        /// than being interpolated into the message: Exception.ToString() drags the full stack
+        /// trace (and, in a Mono build with symbols, absolute source paths) into release player
+        /// logs, and allocates a multi-KB string every frame when a component throws every frame.
+        /// </remarks>
+        private static void LogComponentException(object component, string phase, Exception ex)
+        {
+            var typeName = component != null ? component.GetType().Name : "<null>";
+            UnityEngine.Debug.LogError($"Exception in {typeName}.{phase}: {ex.Message}");
+            UnityEngine.Debug.LogException(ex);
         }
 
         /// <summary>
@@ -184,24 +212,36 @@ namespace Strada.Core.Patterns
 
             UnregisterFromPlayerLoop();
 
-            for (int i = _controllers.Count - 1; i >= 0; i--)
+            // The tick loops already isolate every callback; teardown needs the same treatment.
+            // A single throwing controller used to abort the remaining controllers, skip the
+            // entire service loop and skip the list clears below — and because _disposed is set
+            // first, Dispose could never be retried, so the whole registered component graph
+            // leaked on one failure.
+            try
             {
-                if (_controllers[i] is IDisposable disposable)
-                    disposable.Dispose();
-            }
+                for (int i = _controllers.Count - 1; i >= 0; i--)
+                    DisposeComponent(_controllers[i]);
 
-            for (int i = _services.Count - 1; i >= 0; i--)
+                for (int i = _services.Count - 1; i >= 0; i--)
+                    DisposeComponent(_services[i]);
+            }
+            finally
             {
-                if (_services[i] is IDisposable disposable)
-                    disposable.Dispose();
+                _controllers.Clear();
+                _services.Clear();
+                _fixedControllers.Clear();
+                _tickables.Clear();
+                _fixedTickables.Clear();
+                _lateTickables.Clear();
             }
+        }
 
-            _controllers.Clear();
-            _services.Clear();
-            _fixedControllers.Clear();
-            _tickables.Clear();
-            _fixedTickables.Clear();
-            _lateTickables.Clear();
+        private static void DisposeComponent(object component)
+        {
+            if (!(component is IDisposable disposable)) return;
+
+            try { disposable.Dispose(); }
+            catch (Exception ex) { LogComponentException(component, "Dispose", ex); }
         }
     }
 }

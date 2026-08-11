@@ -25,6 +25,22 @@ namespace Strada.Core.ECS.World
         }
 
         /// <summary>
+        /// Publishes this World as <see cref="Current"/>.
+        /// </summary>
+        /// <remarks>
+        /// The setter is internal so nothing outside the package can hijack the global, but that
+        /// left every World not built by GameBootstrapper — which is every World the builder
+        /// produces, and every World in the tests and benchmarks — permanently invisible to the
+        /// editor tooling that reads <see cref="Current"/>. This is the explicit, opt-in way in.
+        /// </remarks>
+        public void MakeCurrent()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(World));
+            _current = this;
+        }
+
+        /// <summary>
         /// Gets the EntityManager responsible for creating, destroying, and managing entities.
         /// </summary>
         public EntityManager EntityManager => _entities;
@@ -57,8 +73,10 @@ namespace Strada.Core.ECS.World
         public void Initialize()
         {
             if (_initialized) return;
-            _initialized = true;
+            // Flag set after the scheduler has actually run, so IsInitialized cannot report true
+            // for a World whose initialization never completed.
             _scheduler.Initialize();
+            _initialized = true;
         }
 
         /// <summary>
@@ -67,6 +85,10 @@ namespace Strada.Core.ECS.World
         /// <param name="deltaTime">Time since last frame.</param>
         public void Update(float deltaTime)
         {
+            // Drives UpdatePhase.Initialization, which previously had no caller anywhere: systems
+            // registered into it were injected and Initialize()d — so the registration looked
+            // live — but never updated. Runs ahead of Update, mirroring Unity's PlayerLoop.
+            _scheduler.InitializationUpdate(deltaTime);
             _scheduler.Update(deltaTime);
         }
 
@@ -121,9 +143,18 @@ namespace Strada.Core.ECS.World
             if (_current == this)
                 _current = null;
 
-            _scheduler.Dispose();
-            _entities.Dispose();
-            _bus?.Dispose();
+            // The native memory below must be released even if a system's Dispose throws its way
+            // out of the scheduler; otherwise the EntityManager's persistent NativeArrays and
+            // every ComponentStorage leak for the process lifetime.
+            try
+            {
+                _scheduler.Dispose();
+            }
+            finally
+            {
+                _entities.Dispose();
+                _bus?.Dispose();
+            }
         }
     }
 }

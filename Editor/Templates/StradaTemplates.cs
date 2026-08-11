@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -12,6 +13,21 @@ namespace Strada.Core.Editor.Templates
     /// </summary>
     public static class StradaTemplates
     {
+        // The class name is interpolated verbatim into both the generated C# source and the
+        // output file name, so anything that is not a bare C# identifier either produces a
+        // file that cannot compile ("New System") or escapes the folder ("../../evil").
+        private static readonly Regex ValidClassNameRegex =
+            new Regex(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Returns true if <paramref name="className"/> is a bare C# identifier and is therefore
+        /// safe to interpolate into generated source and into a file name.
+        /// </summary>
+        public static bool IsValidClassName(string className)
+        {
+            return !string.IsNullOrEmpty(className) && ValidClassNameRegex.IsMatch(className);
+        }
+
         /// <summary>
         /// Generates an ISystem implementation template.
         /// </summary>
@@ -361,6 +377,17 @@ namespace Strada.Core.Editor.Templates
             string className,
             string folderPath)
         {
+            // Validate at the API boundary rather than trusting the UI: this is public and is
+            // also reached from StradaContextMenus, and className is a sink for both the emitted
+            // source and the file path.
+            if (!IsValidClassName(className))
+            {
+                Debug.LogError(
+                    $"[Strada] Invalid class name '{className}': must be a C# identifier " +
+                    "(letters, digits and underscore, not starting with a digit).");
+                return false;
+            }
+
             try
             {
                 var namespaceName = TemplateContextDetector.ExtractNamespace(folderPath);
@@ -368,6 +395,31 @@ namespace Strada.Core.Editor.Templates
 
                 var fileName = GetFileNameForTemplate(templateType, className);
                 var filePath = Path.Combine(folderPath, fileName);
+
+                // folderPath comes from the Project window selection and is not canonicalised
+                // anywhere upstream, so a "../.." segment would otherwise write outside the
+                // project. Same containment check FileGenerationStep applies.
+                if (!IsInsideAssetsFolder(filePath))
+                {
+                    Debug.LogError($"[Strada] Refusing to write outside the Assets folder: {filePath}");
+                    return false;
+                }
+
+                // File.WriteAllText truncates unconditionally; without this the user silently
+                // loses an existing source file (reachable from 'Generate Controller', where the
+                // name is derived from an existing type).
+                if (File.Exists(filePath))
+                {
+                    var uniquePath = AssetDatabase.GenerateUniqueAssetPath(filePath);
+                    if (string.IsNullOrEmpty(uniquePath) || uniquePath == filePath)
+                    {
+                        Debug.LogError($"[Strada] File already exists, not overwriting: {filePath}");
+                        return false;
+                    }
+
+                    Debug.LogWarning($"[Strada] {filePath} already exists; creating {uniquePath} instead.");
+                    filePath = uniquePath;
+                }
 
                 Directory.CreateDirectory(folderPath);
 
@@ -383,6 +435,33 @@ namespace Strada.Core.Editor.Templates
                 Debug.LogError($"[Strada] Failed to create template: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Returns true if the (possibly relative) path resolves to a location inside the
+        /// project's Assets folder.
+        /// </summary>
+        private static bool IsInsideAssetsFolder(string path)
+        {
+            string fullPath;
+            string assetsRoot;
+            try
+            {
+                fullPath = Path.GetFullPath(path);
+                assetsRoot = Path.GetFullPath(Application.dataPath);
+            }
+            catch (Exception)
+            {
+                // Malformed path (invalid characters, too long) is not containable, so reject it.
+                return false;
+            }
+
+            assetsRoot = assetsRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                         + Path.DirectorySeparatorChar;
+
+            // A trailing separator is required: without it "AssetsEvil/x.cs" prefix-matches
+            // "Assets". Ordinal, because path containment must never be culture sensitive.
+            return fullPath.StartsWith(assetsRoot, StringComparison.Ordinal);
         }
 
         /// <summary>

@@ -1,10 +1,52 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using Unity.Collections;
 using Unity.Jobs;
 
 namespace Strada.Core.ECS.Storage
 {
+    /// <summary>
+    /// Non-generic access to one component's data as a boxed object, for the Type-keyed
+    /// editor paths (inspector, hot reload, time machine).
+    /// </summary>
+    /// <remarks>
+    /// Those paths used to reach <c>ComponentStorage&lt;T&gt;.Get</c>/<c>Set</c> by reflection.
+    /// Besides the per-call member lookup and object[] allocation, that made them depend on
+    /// metadata IL2CPP managed stripping is free to remove: GetMethod would return null in a
+    /// player and the call silently returned null or did nothing, while working in the Editor.
+    /// </remarks>
+    internal interface IBoxedComponentAccess
+    {
+        object GetBoxed(int entityIndex);
+        void SetBoxed(int entityIndex, object value);
+    }
+
+    /// <summary>
+    /// Allocates the dense per-component-type ids used to index a store's storage array.
+    /// </summary>
+    internal static class ComponentTypeIds
+    {
+        private static int _next = -1;
+
+        internal static int Allocate() => Interlocked.Increment(ref _next);
+    }
+
+    /// <summary>
+    /// Dense id for one closed component type, assigned once on first use.
+    /// </summary>
+    /// <remarks>
+    /// Resolving a storage from <c>typeof(T)</c> costs a Dictionary probe on every component
+    /// operation — a virtual RuntimeType.GetHashCode, a bucket walk and a virtual Equals —
+    /// none of which varies with the entity. Reading a static field of a closed generic and
+    /// indexing an array does the same job with no hashing and no virtual dispatch.
+    /// </remarks>
+    internal static class ComponentTypeId<T> where T : unmanaged, IComponent
+    {
+        internal static readonly int Value = ComponentTypeIds.Allocate();
+    }
+
     public interface IComponentStorage : IDisposable
     {
         bool Contains(int entityIndex);
@@ -36,7 +78,7 @@ namespace Strada.Core.ECS.Storage
         void CompletePendingJobs();
     }
 
-    public class ComponentStorage<T> : IComponentStorage where T : unmanaged, IComponent
+    public class ComponentStorage<T> : IComponentStorage, IBoxedComponentAccess where T : unmanaged, IComponent
     {
         private SparseSet<T> _sparseSet;
         private JobHandle _pendingJobs;
@@ -112,6 +154,13 @@ namespace Strada.Core.ECS.Storage
             return ref _sparseSet;
         }
 
+        /// <inheritdoc/>
+        object IBoxedComponentAccess.GetBoxed(int entityIndex) => _sparseSet.Get(entityIndex);
+
+        /// <inheritdoc/>
+        void IBoxedComponentAccess.SetBoxed(int entityIndex, object value) =>
+            _sparseSet.Set(entityIndex, (T)value);
+
         public IReadOnlyList<int> GetEntityIndices()
         {
             var indices = new List<int>(_sparseSet.Count);
@@ -172,17 +221,43 @@ namespace Strada.Core.ECS.Storage
     public class ComponentStore : IDisposable
     {
         private readonly Dictionary<Type, IComponentStorage> _storages;
+
+        /// <summary>
+        /// The same storages as <see cref="_storages"/>, indexed by <see cref="ComponentTypeId{T}"/>.
+        /// </summary>
+        /// <remarks>
+        /// Pure cache: the Dictionary stays the source of truth for the Type-keyed APIs and
+        /// for enumeration. Every component operation goes through storage resolution, so
+        /// this turns the per-operation cost from a Type hash plus bucket probe into one
+        /// array index.
+        /// </remarks>
+        private IComponentStorage[] _storagesById;
         private readonly int _defaultSparseCapacity;
         private readonly int _defaultDenseCapacity;
 
         public ComponentStore(int defaultSparseCapacity = 1024, int defaultDenseCapacity = 256)
         {
             _storages = new Dictionary<Type, IComponentStorage>();
+            _storagesById = new IComponentStorage[32];
             _defaultSparseCapacity = defaultSparseCapacity;
             _defaultDenseCapacity = defaultDenseCapacity;
         }
 
         public ComponentStorage<T> GetOrCreateStorage<T>() where T : unmanaged, IComponent
+        {
+            int id = ComponentTypeId<T>.Value;
+            var byId = _storagesById;
+            if ((uint)id < (uint)byId.Length)
+            {
+                var cached = byId[id];
+                if (cached != null) return (ComponentStorage<T>)cached;
+            }
+
+            return CreateAndCacheStorage<T>(id);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private ComponentStorage<T> CreateAndCacheStorage<T>(int id) where T : unmanaged, IComponent
         {
             Type type = typeof(T);
             if (!_storages.TryGetValue(type, out var storage))
@@ -190,7 +265,20 @@ namespace Strada.Core.ECS.Storage
                 storage = new ComponentStorage<T>(_defaultSparseCapacity, _defaultDenseCapacity);
                 _storages[type] = storage;
             }
+
+            CacheById(id, storage);
             return (ComponentStorage<T>)storage;
+        }
+
+        private void CacheById(int id, IComponentStorage storage)
+        {
+            if (id >= _storagesById.Length)
+            {
+                int newLength = _storagesById.Length;
+                while (newLength <= id) newLength *= 2;
+                Array.Resize(ref _storagesById, newLength);
+            }
+            _storagesById[id] = storage;
         }
 
         public bool HasStorage<T>() where T : unmanaged, IComponent
@@ -211,9 +299,19 @@ namespace Strada.Core.ECS.Storage
         /// </remarks>
         public ComponentStorage<T> TryGetStorage<T>() where T : unmanaged, IComponent
         {
-            return _storages.TryGetValue(typeof(T), out var storage)
-                ? (ComponentStorage<T>)storage
-                : null;
+            int id = ComponentTypeId<T>.Value;
+            var byId = _storagesById;
+            if ((uint)id < (uint)byId.Length)
+            {
+                var cached = byId[id];
+                if (cached != null) return (ComponentStorage<T>)cached;
+            }
+
+            if (!_storages.TryGetValue(typeof(T), out var storage))
+                return null;
+
+            CacheById(id, storage);
+            return (ComponentStorage<T>)storage;
         }
 
         /// <summary>
@@ -253,6 +351,10 @@ namespace Strada.Core.ECS.Storage
                 storage.Dispose();
             }
             _storages.Clear();
+
+            // The id cache holds a second reference to every storage; leaving it populated
+            // would keep handing out disposed storages after the store is torn down.
+            Array.Clear(_storagesById, 0, _storagesById.Length);
         }
 
         public IEnumerable<Type> GetComponentTypes()
@@ -280,13 +382,12 @@ namespace Strada.Core.ECS.Storage
         {
             if (!_storages.TryGetValue(componentType, out var storage))
                 return null;
-
-            var method = storage.GetType().GetMethod("Get");
-            if (method == null) return null;
+            if (!(storage is IBoxedComponentAccess boxed))
+                return null;
 
             try
             {
-                return method.Invoke(storage, new object[] { entityIndex });
+                return boxed.GetBoxed(entityIndex);
             }
             catch (Exception e)
             {
@@ -299,13 +400,12 @@ namespace Strada.Core.ECS.Storage
         {
             if (!_storages.TryGetValue(componentType, out var storage))
                 return;
-
-            var method = storage.GetType().GetMethod("Set");
-            if (method == null) return;
+            if (!(storage is IBoxedComponentAccess boxed))
+                return;
 
             try
             {
-                method.Invoke(storage, new object[] { entityIndex, value });
+                boxed.SetBoxed(entityIndex, value);
             }
             catch (Exception e)
             {

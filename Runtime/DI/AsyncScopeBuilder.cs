@@ -44,38 +44,57 @@ namespace Strada.Core.DI
         {
             var innerScope = _container.CreateScope();
 
-            foreach (var type in _preWarmTypes)
+            try
             {
-                cancellation.ThrowIfCancellationRequested();
-                var instance = innerScope.Resolve(type);
+                List<object> preWarmed = null;
 
-                if (instance is IAsyncInitializable asyncInit)
-                    await asyncInit.InitializeAsync(cancellation).ConfigureAwait(false);
+                foreach (var type in _preWarmTypes)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    var instance = innerScope.Resolve(type);
+
+                    if (instance is IAsyncInitializable asyncInit)
+                    {
+                        await asyncInit.InitializeAsync(cancellation).ConfigureAwait(false);
+                        // Recorded so the scope's first ResolveAsync of a pre-warmed type does not
+                        // run InitializeAsync a second time on the same cached instance.
+                        (preWarmed ??= new List<object>(_preWarmTypes.Count)).Add(instance);
+                    }
+                }
+
+                if (_asyncFactories.Count == 0)
+                    return new AsyncContainerScope(innerScope, preWarmedInstances: preWarmed);
+
+                int maxTypeId = 0;
+                foreach (var (type, _) in _asyncFactories)
+                {
+                    int id = TypeRegistry.GetId(type);
+                    if (id > maxTypeId) maxTypeId = id;
+                }
+
+                var typeIdToAsyncIndex = new int[maxTypeId + 1];
+                Array.Fill(typeIdToAsyncIndex, -1);
+
+                var factories = new Func<Type, CancellationToken, ValueTask<object>>[_asyncFactories.Count];
+                for (int i = 0; i < _asyncFactories.Count; i++)
+                {
+                    var (type, factory) = _asyncFactories[i];
+                    int typeId = TypeRegistry.GetId(type);
+                    typeIdToAsyncIndex[typeId] = i;
+                    // The scope, not the root container: a factory registered on a *scope* builder
+                    // must be able to resolve that scope's Scoped services.
+                    factories[i] = (t, ct) => factory(innerScope, ct);
+                }
+
+                return new AsyncContainerScope(innerScope, factories, typeIdToAsyncIndex, maxTypeId, preWarmed);
             }
-
-            if (_asyncFactories.Count == 0)
-                return new AsyncContainerScope(innerScope);
-
-            int maxTypeId = 0;
-            foreach (var (type, _) in _asyncFactories)
+            catch
             {
-                int id = TypeRegistry.GetId(type);
-                if (id > maxTypeId) maxTypeId = id;
+                // Nothing else holds a reference to innerScope on the failure path, so every scoped
+                // disposable already built by an earlier PreWarm iteration would leak.
+                innerScope.Dispose();
+                throw;
             }
-
-            var typeIdToAsyncIndex = new int[maxTypeId + 1];
-            Array.Fill(typeIdToAsyncIndex, -1);
-
-            var factories = new Func<Type, CancellationToken, ValueTask<object>>[_asyncFactories.Count];
-            for (int i = 0; i < _asyncFactories.Count; i++)
-            {
-                var (type, factory) = _asyncFactories[i];
-                int typeId = TypeRegistry.GetId(type);
-                typeIdToAsyncIndex[typeId] = i;
-                factories[i] = (t, ct) => factory(_container, ct);
-            }
-
-            return new AsyncContainerScope(innerScope, factories, typeIdToAsyncIndex, maxTypeId);
         }
     }
 

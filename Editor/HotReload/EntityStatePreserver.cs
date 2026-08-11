@@ -55,8 +55,15 @@ namespace Strada.Core.Editor.HotReload
                             var componentValue = store.GetComponentBoxed(entityIndex, componentType);
                             if (componentValue != null)
                             {
-                                var json = JsonUtility.ToJson(componentValue);
-                                entitySnapshot.Components[componentType.FullName] = json;
+                                // Store the boxed struct itself, NOT JsonUtility.ToJson of it.
+                                // ECS components are bare `struct X : IComponent` with no
+                                // [Serializable], so JsonUtility emits "{}" for them and the
+                                // matching FromJson on restore hands back default(T) - which
+                                // used to be written straight back into live storage, silently
+                                // zeroing every component in the world on each config save.
+                                // GetComponentBoxed already returns a fresh box, so this is a
+                                // copy, and no domain reload happens between capture and restore.
+                                entitySnapshot.Components[componentType.FullName] = componentValue;
                             }
                         }
                         catch (Exception ex)
@@ -117,11 +124,11 @@ namespace Strada.Core.Editor.HotReload
                     foreach (var kvp in entitySnapshot.Components)
                     {
                         var componentTypeName = kvp.Key;
-                        var componentJson = kvp.Value as string;
-                        
-                        if (string.IsNullOrEmpty(componentJson))
+                        var capturedValue = kvp.Value;
+
+                        if (capturedValue == null)
                             continue;
-                        
+
                         try
                         {
                             var componentType = FindComponentType(componentTypeName);
@@ -136,10 +143,30 @@ namespace Strada.Core.Editor.HotReload
                                 continue;
                             }
 
-                            var componentValue = JsonUtility.FromJson(componentJson, componentType);
-                            if (componentValue != null)
+                            var componentValue = capturedValue;
+
+                            // A string entry can only come from an external producer using the
+                            // old JSON representation; honour it, but never for our own captures.
+                            if (capturedValue is string componentJson)
+                            {
+                                if (string.IsNullOrEmpty(componentJson))
+                                    continue;
+
+                                componentValue = JsonUtility.FromJson(componentJson, componentType);
+                            }
+
+                            // Writing a value of the wrong type would corrupt the component
+                            // storage rather than throw, so check before handing it over.
+                            if (componentValue != null && componentType.IsInstanceOfType(componentValue))
                             {
                                 store.SetComponentBoxed(entityIndex, componentType, componentValue);
+                            }
+                            else if (componentValue != null)
+                            {
+                                Debug.LogWarning(
+                                    $"[EntityStatePreserver] Captured value for {componentTypeName} is a " +
+                                    $"{componentValue.GetType().FullName}; skipping restore.");
+                                failedCount++;
                             }
                         }
                         catch (Exception ex)

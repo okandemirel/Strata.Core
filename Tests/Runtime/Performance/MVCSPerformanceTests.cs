@@ -4,6 +4,7 @@ using NUnit.Framework;
 using Strada.Core.Sync;
 using Strada.Core.Communication;
 using Strada.Core.DI;
+using Strada.Core.DI.Attributes;
 using Strada.Core.Modules;
 using Strada.Core.Patterns;
 
@@ -20,6 +21,12 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         {
             var builder = new ContainerBuilder();
             builder.Register<EventBus>(Lifetime.Singleton);
+            // Backing registrations for the [Inject] members on BenchmarkService and
+            // BenchmarkController. Without them InjectionProcessor has nothing to resolve and
+            // the injection benchmarks below reduce to a dictionary lookup over empty lists.
+            builder.Register<BenchmarkDependencyA>(Lifetime.Singleton);
+            builder.Register<BenchmarkDependencyB>(Lifetime.Singleton);
+            builder.Register<BenchmarkDependencyC>(Lifetime.Singleton);
             _container = builder.Build();
         }
 
@@ -41,11 +48,14 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 InjectionProcessor.Inject(service, _container);
             }
 
+            bool injected = true;
+
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < Iterations; i++)
             {
                 var service = new BenchmarkService();
                 InjectionProcessor.Inject(service, _container);
+                injected &= service.DependenciesInjected;
             }
             sw.Stop();
 
@@ -55,7 +65,11 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
             UnityEngine.Debug.Log($"  Avg: {avgMicroseconds:F2}μs per injection");
 
-            Assert.Less(sw.ElapsedMilliseconds, 100, "Injection too slow (Target: <100ms for 10k)");
+            Assert.IsTrue(injected, "Every injection must fill all three [Inject] fields");
+            // Raised from 100ms: BenchmarkService now carries three [Inject] fields, so each
+            // iteration pays three container resolves plus three reflective field writes rather
+            // than iterating three empty lists.
+            Assert.Less(sw.ElapsedMilliseconds, 300, "Injection too slow (Target: <300ms for 10k x 3 fields)");
         }
 
         [Test]
@@ -190,12 +204,14 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         public void Benchmark_Controller_Lifecycle()
         {
             const int Iterations = 1000;
+            bool injected = true;
 
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < Iterations; i++)
             {
                 var controller = new BenchmarkController();
                 InjectionProcessor.Inject(controller, _container);
+                injected &= controller.DependenciesInjected;
                 controller.Initialize();
                 controller.Dispose();
             }
@@ -207,6 +223,7 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
             UnityEngine.Debug.Log($"  Avg: {avgMicroseconds:F2}μs per cycle (create+inject+init+dispose)");
 
+            Assert.IsTrue(injected, "The inject step of the lifecycle must actually inject something");
             Assert.Less(sw.ElapsedMilliseconds, 500, "Controller lifecycle too slow");
         }
 
@@ -287,6 +304,7 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         {
             const int Iterations = 1000;
             var builder = new ContainerBuilder();
+            bool wired = true;
 
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < Iterations; i++)
@@ -294,6 +312,7 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 var installer = new BenchmarkModuleInstaller();
                 installer.Install(builder);
                 installer.Initialize(_container);
+                wired &= installer.Bus != null && installer.DependencyA != null && installer.DependencyB != null;
                 installer.Shutdown();
             }
             sw.Stop();
@@ -304,18 +323,37 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
             UnityEngine.Debug.Log($"  Avg: {avgMicroseconds:F2}μs per full lifecycle");
 
+            Assert.IsTrue(wired, "Initialize must resolve the services Install registered");
             Assert.Less(sw.ElapsedMilliseconds, 200, "Module lifecycle too slow");
         }
 
         private class LocalService { }
 
+        private class BenchmarkDependencyA { }
+        private class BenchmarkDependencyB { }
+        private class BenchmarkDependencyC { }
+
+        // Carries real [Inject] members. With none, InjectionProcessor.Inject is a
+        // ConcurrentDictionary lookup followed by three foreach loops over empty arrays, which
+        // is what "10k injections" used to measure.
         private class BenchmarkService : Service
         {
+            [Inject] private BenchmarkDependencyA _a = null;
+            [Inject] private BenchmarkDependencyB _b = null;
+            [Inject] private BenchmarkDependencyC _c = null;
+
+            public bool DependenciesInjected => _a != null && _b != null && _c != null;
+
             protected override void OnInitialize() { }
         }
 
         private class BenchmarkController : Controller
         {
+            [Inject] private EventBus _bus = null;
+            [Inject] private BenchmarkDependencyA _a = null;
+
+            public bool DependenciesInjected => _bus != null && _a != null;
+
             protected override void OnInitialize() { }
         }
 
@@ -339,11 +377,35 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             }
         }
 
+        // Three empty bodies made "Module Full Lifecycle" a measurement of 1,000 small
+        // allocations and 3,000 no-op calls. An installer's actual cost is registration during
+        // Install and resolution during Initialize, so it does both here.
         private class BenchmarkModuleInstaller : IModuleInstaller
         {
-            public void Install(IContainerBuilder builder) { }
-            public void Initialize(IContainer container) { }
-            public void Shutdown() { }
+            public EventBus Bus;
+            public BenchmarkDependencyA DependencyA;
+            public BenchmarkDependencyB DependencyB;
+
+            public void Install(IContainerBuilder builder)
+            {
+                builder.Register<BenchmarkDependencyA>(Lifetime.Singleton);
+                builder.Register<BenchmarkDependencyB>(Lifetime.Singleton);
+                builder.Register<BenchmarkDependencyC>(Lifetime.Singleton);
+            }
+
+            public void Initialize(IContainer container)
+            {
+                Bus = container.Resolve<EventBus>();
+                DependencyA = container.Resolve<BenchmarkDependencyA>();
+                DependencyB = container.Resolve<BenchmarkDependencyB>();
+            }
+
+            public void Shutdown()
+            {
+                Bus = null;
+                DependencyA = null;
+                DependencyB = null;
+            }
         }
     }
 }

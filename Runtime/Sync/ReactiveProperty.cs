@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using Strada.Core.Logging;
 
 namespace Strada.Core.Sync
 {
@@ -10,6 +11,102 @@ namespace Strada.Core.Sync
         Strada.Core.SubscriptionToken Subscribe(Action<T> handler);
     }
 
+    /// <summary>
+    /// Type-erased subscription entry point, implemented by every reactive property in the
+    /// framework. It exists so that consumers holding an <c>object</c> — chiefly
+    /// <see cref="ComputedProperty{T}.FromMany"/> — can subscribe without
+    /// <c>MakeGenericMethod</c>. IL2CPP only emits the closed generic instantiations it can
+    /// see statically, so a reflection-only call site throws ExecutionEngineException on AOT
+    /// players; going through this interface keeps the call fully static.
+    /// </summary>
+    public interface IUntypedReactiveProperty
+    {
+        /// <summary>
+        /// Subscribes to value changes without observing the value. Returns a token whose
+        /// disposal removes the subscription.
+        /// </summary>
+        IDisposable SubscribeUntyped(Action onChanged);
+    }
+
+    /// <summary>
+    /// Shared re-entrancy budget for synchronous reactive notification.
+    /// </summary>
+    /// <remarks>
+    /// A feedback loop in the graph (A notifies B, B writes back to A) recurses until the
+    /// thread's stack is exhausted, and StackOverflowException cannot be caught: it terminates
+    /// the Editor or the player outright with no log line and no stack trace. Aborting past a
+    /// depth no legitimate graph reaches turns that into a diagnosable error.
+    /// </remarks>
+    internal static class ReactiveNotifyGuard
+    {
+        internal const int MaxDepth = 64;
+
+        [ThreadStatic] private static int s_depth;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryEnter()
+        {
+            if (s_depth >= MaxDepth) return false;
+            s_depth++;
+            return true;
+        }
+
+        /// <summary>
+        /// Reports an aborted notification. Kept off <see cref="TryEnter"/> so the hot path
+        /// never touches the caller's diagnostic name — that name is a static field on a
+        /// generic type, and reading one of those costs a runtime lookup on Mono.
+        /// </summary>
+        internal static void ReportOverflow(string owner)
+        {
+            StradaLog.LogError(
+                $"Reactive notification exceeded {MaxDepth} nested levels while notifying {owner}. " +
+                "The reactive graph almost certainly contains a feedback loop; notification aborted " +
+                "to avoid an uncatchable StackOverflowException.",
+                LogModule.Sync);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void Exit() => s_depth--;
+    }
+
+    /// <summary>
+    /// Copy-on-write helpers for handler arrays.
+    /// </summary>
+    /// <remarks>
+    /// Every reactive type publishes its handlers as an immutable array so a notification loop
+    /// can iterate the field directly. Iterating a live List instead skips the handler after
+    /// any handler that unsubscribes itself from inside the callback, and snapshotting with
+    /// ToArray() per notification allocates on the hottest path in the layer.
+    /// </remarks>
+    internal static class ReactiveHandlers
+    {
+        internal static THandler[] Append<THandler>(THandler[] current, THandler handler)
+            where THandler : class
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            var grown = new THandler[current.Length + 1];
+            Array.Copy(current, grown, current.Length);
+            grown[current.Length] = handler;
+            return grown;
+        }
+
+        internal static THandler[] Remove<THandler>(THandler[] current, THandler handler)
+            where THandler : class
+        {
+            for (int i = current.Length - 1; i >= 0; i--)
+            {
+                if (!ReferenceEquals(current[i], handler)) continue;
+                if (current.Length == 1) return Array.Empty<THandler>();
+
+                var shrunk = new THandler[current.Length - 1];
+                Array.Copy(current, 0, shrunk, 0, i);
+                Array.Copy(current, i + 1, shrunk, i, current.Length - i - 1);
+                return shrunk;
+            }
+            return current;
+        }
+    }
+
     /// <remarks>
     /// FRAMEWORK DESIGN: ReactiveProperty is intentionally not thread-safe. Strada
     /// targets Unity's main-thread UI/game-state model; locks on every Value setter would
@@ -17,8 +114,12 @@ namespace Strada.Core.Sync
     /// must be marshalled to the main thread by the caller (eg. via
     /// <see cref="UnityEngine.PlayerLoop"/> or a job-completion callback) before assigning.
     /// </remarks>
-    public sealed class ReactiveProperty<T> : IReadOnlyReactiveProperty<T>, IDisposable
+    public sealed class ReactiveProperty<T> : IReadOnlyReactiveProperty<T>, IUntypedReactiveProperty, IDisposable
     {
+        // Built once per closed generic so the notify guard can name the offending property
+        // without formatting anything on the hot path.
+        private static readonly string s_diagnosticName = "ReactiveProperty<" + typeof(T).Name + ">";
+
         private T _value;
         // Copy-on-write: mutation rebuilds the array, notification just reads it. This is the
         // same shape EventBus.EventChannel<T> already uses. The previous List + per-notify
@@ -122,12 +223,41 @@ namespace Strada.Core.Sync
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Notify()
         {
-            // Zero allocation: the array is immutable once published, so reading the field
-            // IS the snapshot. A handler that subscribes/unsubscribes during notification
-            // swaps in a new array and takes effect on the next cycle, exactly as before.
-            var snapshot = _handlers;
-            for (int i = 0; i < snapshot.Length; i++)
-                snapshot[i](_value);
+            // Guarded in Editor and Development builds only. The protection is real — a
+            // feedback loop recurses until the stack is exhausted, and StackOverflowException
+            // cannot be caught — but it is a development-time defect, and paying a
+            // thread-static read plus a try/finally (which blocks inlining) on every single
+            // value change costs more than it saves in a shipped player. Same trade as
+            // QueryGuard in the ECS layer.
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (!ReactiveNotifyGuard.TryEnter())
+            {
+                ReactiveNotifyGuard.ReportOverflow(s_diagnosticName);
+                return;
+            }
+            try
+            {
+#endif
+                // Zero allocation: the array is immutable once published, so reading the field
+                // IS the snapshot. A handler that subscribes/unsubscribes during notification
+                // swaps in a new array and takes effect on the next cycle, exactly as before.
+                var snapshot = _handlers;
+                for (int i = 0; i < snapshot.Length; i++)
+                    snapshot[i](_value);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            }
+            finally
+            {
+                ReactiveNotifyGuard.Exit();
+            }
+#endif
+        }
+
+        /// <inheritdoc />
+        public IDisposable SubscribeUntyped(Action onChanged)
+        {
+            if (onChanged == null) throw new ArgumentNullException(nameof(onChanged));
+            return Subscribe(_ => onChanged());
         }
 
         public void Clear()

@@ -12,9 +12,15 @@ namespace Strada.Core.ECS.Systems
 {
     public abstract class SystemBase : ISystem
     {
+        /// <summary>
+        /// Number of consecutive failed frames logged in full before repeats are collapsed.
+        /// </summary>
+        private const int MaxLoggedFailures = 3;
+
         private readonly List<IDisposable> _disposables = new(4);
         private bool _initialized;
         private bool _disposed;
+        private int _consecutiveFailures;
 
         protected EntityManager EntityManager { get; private set; }
         protected EventBus EventBus { get; private set; }
@@ -40,24 +46,56 @@ namespace Strada.Core.ECS.Systems
             try
             {
                 OnUpdate(deltaTime);
+                _consecutiveFailures = 0;
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex);
+                // A system that fails deterministically fails every frame, and Debug.LogException
+                // formats the whole stack trace, appends to the console ring buffer and repaints
+                // the Editor console each time — 60 times a second, indefinitely. Repeats are
+                // collapsed after the first few; the counter resets on the first clean frame.
+                _consecutiveFailures++;
+                if (_consecutiveFailures <= MaxLoggedFailures)
+                {
+                    Debug.LogException(ex);
+                    if (_consecutiveFailures == MaxLoggedFailures)
+                        Debug.LogError(
+                            $"[Strada] {GetType().Name} has thrown {MaxLoggedFailures} frames in a row; " +
+                            "suppressing further exception logs from this system until it updates cleanly.");
+                }
             }
         }
 
         public void Dispose()
         {
             if (_disposed) return;
-            OnDispose();
-            // Release any tokens captured by the RegisterSignalHandler / RegisterQueryHandler
-            // wrappers below so the EventBus slots do not retain references to this disposed
-            // system. LIFO disposal matches Patterns/Base.
-            for (int i = _disposables.Count - 1; i >= 0; i--)
-                _disposables[i].Dispose();
-            _disposables.Clear();
+            // Flagged first, and the cleanup runs in a finally: OnDispose is user code, and when
+            // it threw the tokens below were never released — so the EventBus slot kept a strong
+            // reference to this system — _disposed stayed false so Update kept running it every
+            // frame, and a second Dispose re-entered OnDispose on a half-torn-down object.
             _disposed = true;
+            try
+            {
+                OnDispose();
+            }
+            finally
+            {
+                // Release any tokens captured by the RegisterSignalHandler / RegisterQueryHandler /
+                // Subscribe wrappers below so the EventBus slots do not retain references to this
+                // disposed system. LIFO disposal matches Patterns/Base.
+                for (int i = _disposables.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        _disposables[i].Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogException(ex);
+                    }
+                }
+                _disposables.Clear();
+            }
         }
 
         protected virtual void OnInitialize() { }
@@ -154,8 +192,42 @@ namespace Strada.Core.ECS.Systems
         protected void RegisterSignalHandler<T>(Action<T> handler) where T : struct
         {
             // Capture the token so Dispose can clear the slot if this system still owns it.
-            var token = EventBus?.RegisterSignalHandler(handler);
-            if (token != null) _disposables.Add(token);
+            AddDisposable(EventBus?.RegisterSignalHandler(handler));
+        }
+
+        /// <summary>
+        /// Subscribes to an event and ties the subscription's lifetime to this system.
+        /// </summary>
+        /// <remarks>
+        /// The counterpart to <see cref="Publish{T}"/>. A subclass that called
+        /// <c>EventBus.Subscribe</c> directly got back a token with nowhere to put it, and the bus
+        /// then kept delivering events to the system long after it was disposed.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected void Subscribe<T>(Action<T> handler) where T : struct
+        {
+            AddDisposable(EventBus?.Subscribe(handler));
+        }
+
+        /// <summary>
+        /// Registers a query handler and ties its lifetime to this system, so the EventBus slot
+        /// is released on Dispose instead of holding this system alive.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected void RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)
+            where TQuery : struct, IQuery<TResult>
+        {
+            AddDisposable(EventBus?.RegisterQueryHandler(handler));
+        }
+
+        /// <summary>
+        /// Enrols a disposable in this system's teardown; it is disposed LIFO by
+        /// <see cref="Dispose"/>. Null is ignored, so results of <c>EventBus?.Xxx()</c> can be
+        /// passed straight through.
+        /// </summary>
+        protected void AddDisposable(IDisposable disposable)
+        {
+            if (disposable != null) _disposables.Add(disposable);
         }
     }
 
@@ -164,6 +236,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -172,7 +246,15 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1) => OnUpdateEntity(entity, ref c1, deltaTime));
+
+            // deltaTime is passed through a field so the lambda captures only `this`.
+            // Capturing the parameter forced Roslyn to build a fresh display class and a
+            // fresh QueryDelegate on every call — two allocations per system per frame,
+            // and QueryDelegate is a managed delegate with no struct-callback overload.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1) =>
+                OnUpdateEntity(entity, ref c1, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, float deltaTime);
@@ -184,6 +266,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -192,7 +276,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2) => OnUpdateEntity(entity, ref c1, ref c2, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2) =>
+                OnUpdateEntity(entity, ref c1, ref c2, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, float deltaTime);
@@ -205,6 +294,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2, T3> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2, T3> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -213,8 +304,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2, T3>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2, ref T3 c3) =>
-                OnUpdateEntity(entity, ref c1, ref c2, ref c3, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2, ref T3 c3) =>
+                OnUpdateEntity(entity, ref c1, ref c2, ref c3, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, ref T3 c3, float deltaTime);
@@ -226,6 +321,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2, T3, T4> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2, T3, T4> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -234,8 +331,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2, T3, T4>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4) =>
-                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4) =>
+                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, float deltaTime);
@@ -247,6 +348,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2, T3, T4, T5> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2, T3, T4, T5> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -255,8 +358,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2, T3, T4, T5>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5) =>
-                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5) =>
+                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, float deltaTime);
@@ -268,6 +375,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2, T3, T4, T5, T6> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2, T3, T4, T5, T6> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -276,8 +385,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2, T3, T4, T5, T6>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6) =>
-                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6) =>
+                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, float deltaTime);
@@ -290,6 +403,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2, T3, T4, T5, T6, T7> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2, T3, T4, T5, T6, T7> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -298,8 +413,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2, T3, T4, T5, T6, T7>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, ref T7 c7) =>
-                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, ref T7 c7) =>
+                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, ref T7 c7, float deltaTime);
@@ -312,6 +431,8 @@ namespace Strada.Core.ECS.Systems
     {
         private EntityQuery<T1, T2, T3, T4, T5, T6, T7, T8> _cachedQuery;
         private bool _queryInitialized;
+        private QueryDelegate<T1, T2, T3, T4, T5, T6, T7, T8> _cachedCallback;
+        private float _deltaTime;
 
         protected sealed override void OnUpdate(float deltaTime)
         {
@@ -320,8 +441,12 @@ namespace Strada.Core.ECS.Systems
                 _cachedQuery = EntityManager.Query().Select<T1, T2, T3, T4, T5, T6, T7, T8>();
                 _queryInitialized = true;
             }
-            _cachedQuery.ForEach((int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, ref T7 c7, ref T8 c8) =>
-                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7, ref c8, deltaTime));
+
+            // See SystemBase<T1>: deltaTime goes through a field so the delegate can be cached.
+            _deltaTime = deltaTime;
+            _cachedCallback ??= (int entity, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, ref T7 c7, ref T8 c8) =>
+                OnUpdateEntity(entity, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7, ref c8, _deltaTime);
+            _cachedQuery.ForEach(_cachedCallback);
         }
 
         protected abstract void OnUpdateEntity(int entityIndex, ref T1 c1, ref T2 c2, ref T3 c3, ref T4 c4, ref T5 c5, ref T6 c6, ref T7 c7, ref T8 c8, float deltaTime);

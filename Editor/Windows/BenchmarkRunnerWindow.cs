@@ -34,6 +34,11 @@ namespace Strada.Core.Editor.Windows
         private double _regressionThreshold = 10.0;
         private bool _showOnlyRegressions;
 
+        // GetSavedSessions hits the filesystem and sorts. IMGUI runs Layout and Repaint as
+        // separate passes, so calling it from OnGUI meant at least two directory
+        // enumerations per input event for as long as the History tab was open.
+        private List<string> _cachedSessions;
+
         private GUIStyle _headerStyle;
         private GUIStyle _categoryStyle;
         private GUIStyle _resultStyle;
@@ -390,17 +395,46 @@ namespace Strada.Core.Editor.Windows
             GUI.contentColor = prevColor;
         }
 
+        /// <summary>
+        /// Returns the saved session paths, reading the results directory only when the
+        /// cache has been invalidated. Never call BenchmarkPersistence.GetSavedSessions
+        /// directly from OnGUI.
+        /// </summary>
+        private List<string> GetCachedSessions()
+        {
+            return _cachedSessions ??= BenchmarkPersistence.GetSavedSessions();
+        }
+
+        private void InvalidateSessionCache()
+        {
+            _cachedSessions = null;
+        }
+
+        private void OnFocus()
+        {
+            // Sessions can be written by another process or an earlier run, so re-read the
+            // directory when the user comes back to the window.
+            InvalidateSessionCache();
+        }
+
         private void DrawHistoryTab()
         {
-            var sessions = BenchmarkPersistence.GetSavedSessions();
+            var sessions = GetCachedSessions();
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField($"Saved Sessions ({sessions.Count})", _headerStyle);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Refresh", GUILayout.Width(70)))
+            {
+                InvalidateSessionCache();
+            }
+            EditorGUILayout.EndHorizontal();
 
             if (sessions.Count == 0)
             {
                 EditorGUILayout.HelpBox("No saved benchmark sessions found.", MessageType.Info);
                 return;
             }
-
-            EditorGUILayout.LabelField($"Saved Sessions ({sessions.Count})", _headerStyle);
 
             _historyScrollPosition = EditorGUILayout.BeginScrollView(_historyScrollPosition);
 
@@ -437,6 +471,7 @@ namespace Strada.Core.Editor.Windows
                         $"Delete benchmark session?\n{filename}", "Delete", "Cancel"))
                     {
                         BenchmarkPersistence.DeleteSession(path);
+                        InvalidateSessionCache();
                     }
                 }
 
@@ -620,6 +655,7 @@ namespace Strada.Core.Editor.Windows
             }
 
             var path = BenchmarkPersistence.SaveSession(_currentSession);
+            InvalidateSessionCache();
             Debug.Log($"[BenchmarkRunner] Saved session to: {path}");
             EditorUtility.DisplayDialog("Session Saved",
                 $"Benchmark results saved to:\n{path}", "OK");

@@ -23,6 +23,10 @@ namespace Strada.Core.Sync
     {
         private readonly IContainer _container;
         private readonly List<IDisposable> _activeMediators = new(64);
+        // Index-parallel with _activeMediators. EntityMediator<TView> has no non-generic base,
+        // so a List<IDisposable> cannot be walked as mediators; capturing SyncBindings at
+        // Create time is what makes SyncAll implementable at all.
+        private readonly List<Action> _syncCallbacks = new(64);
         private bool _disposed;
 
         public int ActiveCount => _activeMediators.Count;
@@ -41,6 +45,7 @@ namespace Strada.Core.Sync
             mediator.Initialize(_container);
             mediator.Bind(entity, view);
             _activeMediators.Add(mediator);
+            _syncCallbacks.Add(mediator.SyncBindings);
             return mediator;
         }
 
@@ -50,12 +55,27 @@ namespace Strada.Core.Sync
             where TView : View
         {
             mediator.Unbind();
-            _activeMediators.Remove(mediator);
+            int index = _activeMediators.IndexOf(mediator);
+            if (index >= 0)
+            {
+                _activeMediators.RemoveAt(index);
+                _syncCallbacks.RemoveAt(index);
+            }
             MediatorPool<TMediator, TView>.Instance.Return(mediator);
         }
 
+        /// <summary>
+        /// Syncs the bindings of every active mediator. This used to be an empty body, so any
+        /// caller that wired it into an update loop got zero mediators synced instead of N.
+        /// </summary>
         public void SyncAll()
         {
+            if (_disposed) return;
+
+            for (int i = 0; i < _syncCallbacks.Count; i++)
+            {
+                _syncCallbacks[i]();
+            }
         }
 
         public void ReleaseAll()
@@ -65,6 +85,7 @@ namespace Strada.Core.Sync
                 _activeMediators[i].Dispose();
             }
             _activeMediators.Clear();
+            _syncCallbacks.Clear();
         }
 
         public void Dispose()

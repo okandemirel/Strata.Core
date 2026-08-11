@@ -246,101 +246,154 @@ namespace Strada.Core.Editor.Benchmarking
             return RunDIBenchmark("DI_SingletonResolve", Lifetime.Singleton, iterations);
         }
 
-        private BenchmarkResult RunDIBenchmark(string name, Lifetime lifetime, int iterations)
+        /// <summary>
+        /// Untimed iterations run before measurement starts, per Documentation~/Benchmarks.md.
+        /// </summary>
+        private const int WarmupIterations = 1000;
+
+        /// <summary>
+        /// Iterations per Stopwatch start/stop pair.
+        /// </summary>
+        private const int BatchSize = 64;
+
+        private static int WarmupCountFor(int iterations)
         {
-            var timings = new double[iterations];
-            var sw = new Stopwatch();
+            return Math.Min(WarmupIterations, Math.Max(iterations, 0));
+        }
+
+        /// <summary>
+        /// Warms up, settles the heap, then times <paramref name="operation"/> in batches and
+        /// returns per-iteration timings in milliseconds.
+        /// </summary>
+        /// <param name="iterations">Number of measured iterations.</param>
+        /// <param name="operation">
+        /// The operation under test. It receives a monotonically increasing index that spans the
+        /// warmup phase first (0..warmup-1) and then the measured phase, so operations that
+        /// consume a distinct input per call can size their inputs with
+        /// <see cref="WarmupCountFor"/> and index them directly.
+        /// </param>
+        /// <param name="memoryDelta">Bytes allocated across the measured loop only.</param>
+        /// <remarks>
+        /// Three things this fixes over timing each iteration in isolation with no warmup.
+        /// First, the very first call pays JIT of the operation and, for the container, the
+        /// one-off Expression.Compile of the resolution path - a millisecond-scale outlier that
+        /// BenchmarkResult.Calculate folds into a plain untrimmed mean whose pass threshold is
+        /// measured in microseconds. Second, Stopwatch start/stop plus the TimeSpan
+        /// normalisation of <c>sw.Elapsed</c> cost tens of nanoseconds, the same order as the
+        /// operations being measured, so the cost is amortised over a batch and divided back
+        /// out. Third, the allocation baseline is taken here, after all caller setup, so a
+        /// container or a pre-populated world is no longer counted as the operation's cost.
+        /// </remarks>
+        private static double[] Measure(int iterations, Action<int> operation, out long memoryDelta)
+        {
+            var timings = new double[Math.Max(iterations, 0)];
+            if (iterations <= 0)
+            {
+                memoryDelta = 0;
+                return timings;
+            }
+
+            var warmup = WarmupCountFor(iterations);
+            for (int i = 0; i < warmup; i++)
+            {
+                operation(i);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
             long memoryBefore = GC.GetTotalMemory(true);
 
+            var sw = new Stopwatch();
+            int done = 0;
+            while (done < iterations)
+            {
+                var batch = Math.Min(BatchSize, iterations - done);
+
+                sw.Restart();
+                for (int i = 0; i < batch; i++)
+                {
+                    operation(warmup + done + i);
+                }
+                sw.Stop();
+
+                var perIteration = sw.Elapsed.TotalMilliseconds / batch;
+                for (int i = 0; i < batch; i++)
+                {
+                    timings[done + i] = perIteration;
+                }
+
+                done += batch;
+            }
+
+            memoryDelta = GC.GetTotalMemory(false) - memoryBefore;
+            return timings;
+        }
+
+        private BenchmarkResult RunDIBenchmark(string name, Lifetime lifetime, int iterations)
+        {
             var container = new ContainerBuilder()
                 .Register<ITestService, TestServiceImpl>(lifetime)
                 .Build();
 
-            for (int i = 0; i < iterations; i++)
-            {
-                sw.Restart();
-                var _ = container.Resolve<ITestService>();
-                sw.Stop();
-                timings[i] = sw.Elapsed.TotalMilliseconds;
-            }
+            var timings = Measure(iterations, _ => container.Resolve<ITestService>(), out var memoryDelta);
 
-            long memoryAfter = GC.GetTotalMemory(false);
             container.Dispose();
 
             return BenchmarkResult.Calculate(
                 name,
                 "DI Container",
                 timings,
-                memoryAfter - memoryBefore,
+                memoryDelta,
                 iterations);
         }
 
         private BenchmarkResult RunECSEntityCreationBenchmark(int iterations)
         {
-            var timings = new double[iterations];
-            var sw = new Stopwatch();
-            long memoryBefore = GC.GetTotalMemory(true);
-
             var world = new ECSBuilder().Build();
 
-            for (int i = 0; i < iterations; i++)
-            {
-                sw.Restart();
-                world.CreateEntity();
-                sw.Stop();
-                timings[i] = sw.Elapsed.TotalMilliseconds;
-            }
+            var timings = Measure(iterations, _ => world.CreateEntity(), out var memoryDelta);
 
-            long memoryAfter = GC.GetTotalMemory(false);
             world.Dispose();
 
             return BenchmarkResult.Calculate(
                 "ECS_EntityCreation",
                 "ECS",
                 timings,
-                memoryAfter - memoryBefore,
+                memoryDelta,
                 iterations);
         }
 
         private BenchmarkResult RunECSComponentAddBenchmark(int iterations)
         {
-            var timings = new double[iterations];
-            var sw = new Stopwatch();
-            long memoryBefore = GC.GetTotalMemory(true);
-
             var world = new ECSBuilder().Build();
-            var entities = new Entity[iterations];
 
-            for (int i = 0; i < iterations; i++)
+            // One entity per call including the warmup phase, so every measured call is a first
+            // add on a fresh entity rather than an overwrite of one the warmup already touched.
+            var entities = new Entity[WarmupCountFor(iterations) + Math.Max(iterations, 0)];
+            for (int i = 0; i < entities.Length; i++)
             {
                 entities[i] = world.CreateEntity();
             }
 
-            for (int i = 0; i < iterations; i++)
-            {
-                sw.Restart();
-                world.AddComponent(entities[i], new TestComponent { Value = i });
-                sw.Stop();
-                timings[i] = sw.Elapsed.TotalMilliseconds;
-            }
+            var timings = Measure(
+                iterations,
+                i => world.AddComponent(entities[i], new TestComponent { Value = i }),
+                out var memoryDelta);
 
-            long memoryAfter = GC.GetTotalMemory(false);
             world.Dispose();
 
             return BenchmarkResult.Calculate(
                 "ECS_ComponentAdd",
                 "ECS",
                 timings,
-                memoryAfter - memoryBefore,
+                memoryDelta,
                 iterations);
         }
 
         private BenchmarkResult RunECSQueryBenchmark(int iterations)
         {
-            var timings = new double[iterations];
-            var sw = new Stopwatch();
-            long memoryBefore = GC.GetTotalMemory(true);
-
             var world = new ECSBuilder().Build();
 
             for (int i = 0; i < 1000; i++)
@@ -349,84 +402,68 @@ namespace Strada.Core.Editor.Benchmarking
                 world.AddComponent(entity, new TestComponent { Value = i });
             }
 
-            for (int i = 0; i < iterations; i++)
-            {
-                sw.Restart();
-                int count = 0;
-                world.EntityManager.ForEach<TestComponent>((int entityIndex, ref TestComponent c) => count++);
-                sw.Stop();
-                timings[i] = sw.Elapsed.TotalMilliseconds;
-            }
+            // The counter and the delegate are hoisted out of the measured loop on purpose.
+            // Declaring `count` inside the loop makes the lambda capture it, which costs a
+            // display-class plus a delegate allocation per iteration - inside the timing window,
+            // and counted against the query's allocation figure.
+            int count = 0;
+            QueryDelegate<TestComponent> countAction = (int entityIndex, ref TestComponent c) => count++;
 
-            long memoryAfter = GC.GetTotalMemory(false);
+            var timings = Measure(
+                iterations,
+                _ =>
+                {
+                    count = 0;
+                    world.EntityManager.ForEach(countAction);
+                },
+                out var memoryDelta);
+
             world.Dispose();
 
             return BenchmarkResult.Calculate(
                 "ECS_ComponentQuery",
                 "ECS",
                 timings,
-                memoryAfter - memoryBefore,
+                memoryDelta,
                 iterations);
         }
 
         private BenchmarkResult RunBusEventBenchmark(int iterations)
         {
-            var timings = new double[iterations];
-            var sw = new Stopwatch();
-            long memoryBefore = GC.GetTotalMemory(true);
-
             var bus = new EventBus();
             int receivedCount = 0;
             bus.Subscribe<TestEvent>(e => receivedCount++);
 
             var testEvent = new TestEvent { Data = "test" };
 
-            for (int i = 0; i < iterations; i++)
-            {
-                sw.Restart();
-                bus.Publish(testEvent);
-                sw.Stop();
-                timings[i] = sw.Elapsed.TotalMilliseconds;
-            }
+            var timings = Measure(iterations, _ => bus.Publish(testEvent), out var memoryDelta);
 
-            long memoryAfter = GC.GetTotalMemory(false);
             bus.Dispose();
 
             return BenchmarkResult.Calculate(
                 "Bus_EventPublish",
                 "Message Bus",
                 timings,
-                memoryAfter - memoryBefore,
+                memoryDelta,
                 iterations);
         }
 
         private BenchmarkResult RunBusCommandBenchmark(int iterations)
         {
-            var timings = new double[iterations];
-            var sw = new Stopwatch();
-            long memoryBefore = GC.GetTotalMemory(true);
-
             var bus = new EventBus();
             bus.RegisterSignalHandler<TestSignal>(cmd => { /* no-op handler */ });
 
             var testCommand = new TestSignal { Id = 1 };
 
-            for (int i = 0; i < iterations; i++)
-            {
-                sw.Restart();
-                bus.Send(testCommand);
-                sw.Stop();
-                timings[i] = sw.Elapsed.TotalMilliseconds;
-            }
+            var timings = Measure(iterations, _ => bus.Send(testCommand), out var memoryDelta);
 
-            long memoryAfter = GC.GetTotalMemory(false);
             bus.Dispose();
 
             return BenchmarkResult.Calculate(
                 "Bus_CommandDispatch",
                 "Message Bus",
                 timings,
-                memoryAfter - memoryBefore,
+                memoryDelta,
                 iterations);
         }
 

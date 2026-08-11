@@ -146,8 +146,7 @@ namespace Strada.Core.Editor.PropertyDrawers
         private object GetReactivePropertyInstance(SerializedProperty property)
         {
             var targetObject = property.serializedObject.targetObject;
-            var field = GetFieldByPath(targetObject.GetType(), property.propertyPath);
-            return field?.GetValue(targetObject);
+            return ResolveByPath(targetObject, property.propertyPath);
         }
 
         private int GetSubscriberCount(SerializedProperty property)
@@ -170,25 +169,98 @@ namespace Strada.Core.Editor.PropertyDrawers
             notifyMethod?.Invoke(reactiveProperty, null);
         }
 
-        private static FieldInfo GetFieldByPath(Type type, string path)
+        /// <summary>
+        /// Walks a SerializedProperty path over the live object graph and returns the
+        /// ReactiveProperty instance it addresses, or null.
+        /// </summary>
+        /// <remarks>
+        /// This resolves the instance rather than a FieldInfo because a FieldInfo cannot express
+        /// a collection element. Unity spells an element as "_props.Array.data[3]", and the old
+        /// code skipped the "Array" and "data[3]" segments without ever unwrapping the element
+        /// type - so it then looked for the next segment on List&lt;ReactiveProperty&lt;T&gt;&gt;,
+        /// found nothing, and returned null for every ReactiveProperty stored in an array or list.
+        /// </remarks>
+        private static object ResolveByPath(object root, string path)
         {
+            if (root == null || string.IsNullOrEmpty(path))
+                return null;
+
+            object current = root;
             var parts = path.Split('.');
-            FieldInfo field = null;
-            var currentType = type;
 
-            foreach (var part in parts)
+            for (int i = 0; i < parts.Length; i++)
             {
-                if (part == "Array" || part.StartsWith("data[")) continue;
+                if (current == null)
+                    return null;
 
-                field = currentType.GetField(part, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field == null) return null;
+                if (IsReactivePropertyType(current.GetType()))
+                    return current;
 
-                currentType = field.FieldType;
-                if (currentType.IsGenericType && currentType.GetGenericTypeDefinition() == typeof(Sync.ReactiveProperty<>))
+                var part = parts[i];
+
+                if (part == "Array" && i + 1 < parts.Length && parts[i + 1].StartsWith("data[", StringComparison.Ordinal))
+                {
+                    if (!TryParseElementIndex(parts[i + 1], out var index))
+                        return null;
+
+                    current = GetElementAt(current, index);
+                    i++;
+                    continue;
+                }
+
+                var field = FindField(current.GetType(), part);
+                if (field == null)
+                    return null;
+
+                current = field.GetValue(current);
+            }
+
+            return current != null && IsReactivePropertyType(current.GetType()) ? current : null;
+        }
+
+        private static bool TryParseElementIndex(string segment, out int index)
+        {
+            index = 0;
+            var open = segment.IndexOf('[');
+            var close = segment.IndexOf(']');
+            if (open < 0 || close <= open + 1)
+                return false;
+
+            return int.TryParse(segment.Substring(open + 1, close - open - 1), out index);
+        }
+
+        private static object GetElementAt(object collection, int index)
+        {
+            // Both T[] and List<T> implement IList, which is all the indexing this needs.
+            if (collection is System.Collections.IList list)
+                return index >= 0 && index < list.Count ? list[index] : null;
+
+            return null;
+        }
+
+        private static FieldInfo FindField(Type type, string name)
+        {
+            // Private fields are not visible through a derived type, so walk the base chain.
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                var field = current.GetField(name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                if (field != null)
                     return field;
             }
 
-            return field;
+            return null;
+        }
+
+        private static bool IsReactivePropertyType(Type type)
+        {
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(Sync.ReactiveProperty<>))
+                    return true;
+            }
+
+            return false;
         }
 
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)

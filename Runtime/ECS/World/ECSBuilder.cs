@@ -10,10 +10,32 @@ namespace Strada.Core.ECS.World
         private readonly List<(Type systemType, UpdatePhase phase, Func<World, ISystem> factory)> _systemFactories = new();
         private int _initialEntityCapacity = 1024;
         private EventBus _eventBus;
+        private bool _makeCurrent;
 
         public ECSBuilder WithInitialEntityCapacity(int capacity)
         {
+            // Validated here rather than only inside the EntityManager constructor, so the bad
+            // argument is reported at the call that supplied it.
+            if (capacity <= 0)
+                throw new ArgumentOutOfRangeException(nameof(capacity),
+                    $"Initial entity capacity must be positive (got {capacity}).");
+
             _initialEntityCapacity = capacity;
+            return this;
+        }
+
+        /// <summary>
+        /// Publishes the built World as <see cref="World.Current"/>.
+        /// </summary>
+        /// <remarks>
+        /// Opt-in rather than automatic: <c>World.Current</c> is a process-wide global, and a test
+        /// or tool that builds a second World must be able to do so without displacing the one the
+        /// application is running. Without this, builder-created Worlds were unreachable from the
+        /// editor tooling entirely, because the setter is internal to the package.
+        /// </remarks>
+        public ECSBuilder AsCurrent()
+        {
+            _makeCurrent = true;
             return this;
         }
 
@@ -68,6 +90,9 @@ namespace Strada.Core.ECS.World
 
                 scheduler.AddSystem(system, phase);
             }
+
+            if (_makeCurrent)
+                world.MakeCurrent();
 
             return world;
         }

@@ -21,9 +21,27 @@ namespace Strada.Core.Editor.Benchmarking
 
         private static void ValidatePath(string path)
         {
-            var fullPath = Path.GetFullPath(path);
-            var projectRoot = Path.GetFullPath(ProjectRoot);
-            if (!fullPath.StartsWith(projectRoot))
+            string fullPath;
+            string projectRoot;
+            try
+            {
+                fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                projectRoot = Path.GetFullPath(ProjectRoot)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception ex)
+            {
+                // A malformed path cannot be proven contained, so it must fail the same way an
+                // escaping one does rather than surfacing as an ArgumentException from GetFullPath.
+                throw new InvalidOperationException($"Invalid path: {path}", ex);
+            }
+
+            if (string.Equals(fullPath, projectRoot, StringComparison.Ordinal))
+                return;
+
+            // The trailing separator matters: without it "<root>-backup/x.json" prefix-matches
+            // "<root>". Ordinal, because path containment must never be culture sensitive.
+            if (!fullPath.StartsWith(projectRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 throw new InvalidOperationException($"Path outside project: {fullPath}");
         }
 

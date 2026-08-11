@@ -14,49 +14,49 @@ namespace Strada.Core.Editor.Templates
         [MenuItem("Assets/Create/Strada/System", false, MenuPriority)]
         public static void CreateSystem()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.System, "New System");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.System, "NewSystem");
         }
 
         [MenuItem("Assets/Create/Strada/Controller", false, MenuPriority + 1)]
         public static void CreateController()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Controller, "New Controller");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Controller, "NewController");
         }
 
         [MenuItem("Assets/Create/Strada/Service", false, MenuPriority + 2)]
         public static void CreateService()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Service, "New Service");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Service, "NewService");
         }
 
         [MenuItem("Assets/Create/Strada/Component", false, MenuPriority + 3)]
         public static void CreateComponent()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Component, "New Component");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Component, "NewComponent");
         }
 
         [MenuItem("Assets/Create/Strada/View", false, MenuPriority + 4)]
         public static void CreateView()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.View, "New View");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.View, "NewView");
         }
 
         [MenuItem("Assets/Create/Strada/Config (CD_)", false, MenuPriority + 5)]
         public static void CreateConfig()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Config, "New Config");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Config, "NewConfig");
         }
 
         [MenuItem("Assets/Create/Strada/Command", false, MenuPriority + 6)]
         public static void CreateCommand()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Command, "New Command");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Command, "NewCommand");
         }
 
         [MenuItem("Assets/Create/Strada/Event", false, MenuPriority + 7)]
         public static void CreateEvent()
         {
-            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Event, "New Event");
+            CreateTemplateWithDialog(TemplateContextDetector.TemplateType.Event, "NewEvent");
         }
 
         [MenuItem("Assets/Create/Strada/Context-Aware Template...", false, MenuPriority + 20)]
@@ -164,7 +164,7 @@ namespace Strada.Core.Editor.Templates
                 Close();
             }
 
-            EditorGUI.BeginDisabledGroup(string.IsNullOrWhiteSpace(_className));
+            EditorGUI.BeginDisabledGroup(!StradaTemplates.IsValidClassName(_className));
             if (GUILayout.Button("Create", GUILayout.Width(80)))
             {
                 CreateTemplate();
@@ -180,6 +180,13 @@ namespace Strada.Core.Editor.Templates
             if (string.IsNullOrWhiteSpace(_className))
             {
                 _preview = "Enter a class name to see preview...";
+                return;
+            }
+
+            if (!StradaTemplates.IsValidClassName(_className))
+            {
+                _preview = $"'{_className}' is not a valid C# identifier. Use letters, digits and " +
+                           "underscores only, and do not start with a digit.";
                 return;
             }
 
@@ -285,7 +292,7 @@ namespace Strada.Core.Editor.Templates
                 Close();
             }
 
-            EditorGUI.BeginDisabledGroup(string.IsNullOrWhiteSpace(_className));
+            EditorGUI.BeginDisabledGroup(!StradaTemplates.IsValidClassName(_className));
             if (GUILayout.Button("Create", GUILayout.Width(80)))
             {
                 CreateTemplate();
@@ -307,6 +314,13 @@ namespace Strada.Core.Editor.Templates
             if (string.IsNullOrWhiteSpace(_className))
             {
                 _preview = "Enter a class name to see preview...";
+                return;
+            }
+
+            if (!StradaTemplates.IsValidClassName(_className))
+            {
+                _preview = $"'{_className}' is not a valid C# identifier. Use letters, digits and " +
+                           "underscores only, and do not start with a digit.";
                 return;
             }
 

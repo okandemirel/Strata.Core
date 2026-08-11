@@ -36,7 +36,21 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 storage.Clear();
                 addCount = 0;
             })
+            // Without a GC sample group the report is wall-clock only, and the notification
+            // path's per-write callback-list snapshot never shows up anywhere.
+            .GC()
             .Run();
+
+            // The harness owns how many warmup and measurement passes ran, so assert on a pass
+            // this test controls. Previously nothing here could fail: a storage that dropped
+            // every OnAdd notification would still report a green benchmark.
+            storage.Clear();
+            addCount = 0;
+            for (var i = 0; i < 10000; i++)
+                storage.Add(i, new TestComponent { Value = i });
+
+            Assert.AreEqual(10000, addCount, "Every Add should raise exactly one OnAdd");
+            Assert.AreEqual(10000, storage.Count);
 
             storage.Dispose();
         }
@@ -63,7 +77,14 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             })
             .WarmupCount(3)
             .MeasurementCount(10)
+            .GC()
             .Run();
+
+            changeCount = 0;
+            for (var i = 0; i < 10000; i++)
+                storage.Set(i, new TestComponent { Value = i + 2 });
+
+            Assert.AreEqual(10000, changeCount, "Every Set on an existing entity should raise exactly one OnChange");
 
             storage.Dispose();
         }
@@ -94,7 +115,16 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
                 storage.Clear();
                 for (var i = 0; i < 5; i++) counts[i] = 0;
             })
+            .GC()
             .Run();
+
+            storage.Clear();
+            for (var i = 0; i < 5; i++) counts[i] = 0;
+            for (var i = 0; i < 10000; i++)
+                storage.Add(i, new TestComponent { Value = i });
+
+            for (var s = 0; s < 5; s++)
+                Assert.AreEqual(10000, counts[s], $"Subscriber {s} should have been notified for every Add");
 
             storage.Dispose();
         }
@@ -114,7 +144,16 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             .WarmupCount(1)
             .MeasurementCount(5)
             .SetUp(() => storage.Clear())
+            // This is the baseline the three reactive benchmarks above are meant to be read
+            // against, so it needs the same GC sample group for the comparison to mean anything.
+            .GC()
             .Run();
+
+            storage.Clear();
+            for (var i = 0; i < 10000; i++)
+                storage.Add(i, new TestComponent { Value = i });
+
+            Assert.AreEqual(10000, storage.Count);
 
             storage.Dispose();
         }

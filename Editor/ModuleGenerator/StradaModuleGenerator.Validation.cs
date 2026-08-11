@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -132,7 +133,7 @@ namespace Strada.Core.Editor.ModuleGenerator
                 return;
             }
 
-            if (!path.StartsWith("Assets"))
+            if (!IsInsideAssetsFolder(path))
             {
                 _validationMessages.Add(ValidationMessage.Error("Target path must be within the Assets folder.", "TargetPath"));
                 return;
@@ -148,6 +149,41 @@ namespace Strada.Core.Editor.ModuleGenerator
             {
                 _validationMessages.Add(ValidationMessage.Error($"Folder '{fullPath}' already exists.", "TargetPath"));
             }
+        }
+
+        /// <summary>
+        /// Returns true if the (possibly relative) path resolves to a location inside the
+        /// project's Assets folder.
+        /// </summary>
+        /// <remarks>
+        /// The path has to be canonicalised first: an uncanonicalised StartsWith("Assets") test
+        /// is satisfied by both "Assets/../../anything" and "AssetsEvil/anything", and the
+        /// generator hands this path straight to Directory.CreateDirectory and File.WriteAllText.
+        /// </remarks>
+        internal static bool IsInsideAssetsFolder(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return false;
+
+            string fullPath;
+            string assetsRoot;
+            try
+            {
+                fullPath = Path.GetFullPath(path);
+                assetsRoot = Path.GetFullPath(Application.dataPath);
+            }
+            catch (Exception)
+            {
+                // Malformed path (invalid characters, too long) cannot be proven contained.
+                return false;
+            }
+
+            assetsRoot = assetsRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                         + Path.DirectorySeparatorChar;
+
+            // Ordinal, because path containment must never depend on the current culture, and
+            // with the trailing separator so "AssetsEvil" cannot prefix-match "Assets".
+            return fullPath.StartsWith(assetsRoot, StringComparison.Ordinal);
         }
 
         private void ValidateModuleType()

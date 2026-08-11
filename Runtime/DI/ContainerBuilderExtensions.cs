@@ -8,8 +8,6 @@ namespace Strada.Core.DI
 {
     public static class ContainerBuilderExtensions
     {
-        private static bool s_loggedTypeResolutionWarning;
-
         public static IContainerBuilder RegisterAutoBindings(this IContainerBuilder builder)
         {
             return RegisterAutoBindings(builder, null, null, false);
@@ -39,14 +37,10 @@ namespace Strada.Core.DI
 
         private static bool TryUseSourceGenerated(IContainerBuilder builder)
         {
+            MethodInfo registerMethod;
+
             try
             {
-                if (!s_loggedTypeResolutionWarning)
-                {
-                    Debug.LogWarning("ContainerBuilderExtensions: Using runtime type resolution from string to locate StradaGeneratedRegistry.");
-                    s_loggedTypeResolutionWarning = true;
-                }
-
                 var registryType =
                     Type.GetType("Strada.Generated.StradaGeneratedRegistry, Assembly-CSharp") ??
                     Type.GetType("Strada.Generated.StradaGeneratedRegistry, Assembly-CSharp-firstpass") ??
@@ -59,12 +53,9 @@ namespace Strada.Core.DI
                 if (isGenProp != null && !(bool)isGenProp.GetValue(null))
                     return false;
 
-                var registerMethod = registryType.GetMethod("RegisterAll");
+                registerMethod = registryType.GetMethod("RegisterAll");
                 if (registerMethod == null)
                     return false;
-
-                registerMethod.Invoke(null, new object[] { builder });
-                return true;
             }
             catch (TypeLoadException ex)
             {
@@ -81,18 +72,35 @@ namespace Strada.Core.DI
                 Debug.LogWarning($"Strada generated registry not found, skipping auto-registration. {ex.Message}");
                 return false;
             }
+
+            // Deliberately outside the catch above. RegisterAll mutates the caller's builder in
+            // place, so a mid-way failure leaves it partially populated; swallowing that and
+            // falling through to the runtime scanner layers a second registration pass on top of
+            // the wreckage and reports "registry not found", which is not what happened.
+            try
+            {
+                registerMethod.Invoke(null, new object[] { builder });
+            }
+            catch (TargetInvocationException ex)
+            {
+                throw new InvalidOperationException(
+                    "Strada generated registry RegisterAll failed; the container builder is now partially populated.",
+                    ex.InnerException ?? ex);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "Strada generated registry RegisterAll could not be invoked; the container builder may be partially populated.",
+                    ex);
+            }
+
+            return true;
         }
 
         public static int GetAutoBindingCount()
         {
             try
             {
-                if (!s_loggedTypeResolutionWarning)
-                {
-                    Debug.LogWarning("ContainerBuilderExtensions: Using runtime type resolution from string to locate StradaGeneratedRegistry.");
-                    s_loggedTypeResolutionWarning = true;
-                }
-
                 var registryType =
                     Type.GetType("Strada.Generated.StradaGeneratedRegistry, Assembly-CSharp") ??
                     Type.GetType("Strada.Generated.StradaGeneratedRegistry");

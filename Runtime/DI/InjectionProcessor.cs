@@ -17,18 +17,24 @@ namespace Strada.Core.DI
             var type = target.GetType();
             var info = GetOrCreateInfo(type);
 
-            InjectMethods(target, info.Methods, container);
-            InjectProperties(target, info.Properties, container);
+            // Fields and properties first, then methods: an [Inject] method that reads an [Inject]
+            // field would otherwise always see null. This matches Zenject and VContainer.
             InjectFields(target, info.Fields, container);
+            InjectProperties(target, info.Properties, container);
+            InjectMethods(target, info.Methods, container);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void InjectInto<T>(T target, IContainer container) where T : class
             => Inject(target, container);
 
+        // Cached so GetOrAdd does not materialise a fresh delegate on every Inject() call. Roslyn
+        // only caches static method groups from C# 11 onwards, and Unity 6 compiles at C# 9.
+        private static readonly Func<Type, TypeInjectionInfo> BuildInjectionInfoFactory = BuildInjectionInfo;
+
         private static TypeInjectionInfo GetOrCreateInfo(Type type)
         {
-            return _cache.GetOrAdd(type, BuildInjectionInfo);
+            return _cache.GetOrAdd(type, BuildInjectionInfoFactory);
         }
 
         private static TypeInjectionInfo BuildInjectionInfo(Type type)
@@ -42,37 +48,80 @@ namespace Strada.Core.DI
             // services can keep their dependencies out of their public API. Removing
             // NonPublic would force every dependency to be public, which is at odds with
             // standard DI conventions.
-            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            //
+            // DeclaredOnly plus an explicit walk up BaseType, because reflection does NOT return
+            // *private* base-class members for a derived type — only protected and internal ones.
+            // Without the walk, changing an [Inject] member on a base class from protected to
+            // private silently stops it being injected.
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public |
+                                       BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
-            foreach (var method in type.GetMethods(flags))
+            var hierarchy = new List<Type>(4);
+            for (var current = type; current != null && current != typeof(object); current = current.BaseType)
+                hierarchy.Add(current);
+
+            HashSet<MethodInfo> seenMethods = null;
+            HashSet<MethodInfo> seenPropertySetters = null;
+
+            // Base first, so a base class's dependencies are in place before the derived class's.
+            for (int h = hierarchy.Count - 1; h >= 0; h--)
             {
-                if (method.GetCustomAttribute<InjectAttribute>() == null)
-                    continue;
+                var level = hierarchy[h];
 
-                var parameters = method.GetParameters();
-                var paramTypes = new Type[parameters.Length];
+                foreach (var method in level.GetMethods(flags))
+                {
+                    if (method.GetCustomAttribute<InjectAttribute>() == null)
+                        continue;
 
-                for (int i = 0; i < parameters.Length; i++)
-                    paramTypes[i] = parameters[i].ParameterType;
+                    // An override and the virtual it overrides are two MethodInfos for one call.
+                    seenMethods ??= new HashSet<MethodInfo>();
+                    if (!seenMethods.Add(method.GetBaseDefinition()))
+                        continue;
 
-                methods.Add(new MethodInjectionInfo(method, paramTypes));
-            }
+                    var parameters = method.GetParameters();
+                    var paramTypes = new Type[parameters.Length];
 
-            foreach (var property in type.GetProperties(flags))
-            {
-                if (property.GetCustomAttribute<InjectAttribute>() == null)
-                    continue;
+                    for (int i = 0; i < parameters.Length; i++)
+                        paramTypes[i] = parameters[i].ParameterType;
 
-                if (property.CanWrite)
+                    methods.Add(new MethodInjectionInfo(method, paramTypes));
+                }
+
+                foreach (var property in level.GetProperties(flags))
+                {
+                    if (property.GetCustomAttribute<InjectAttribute>() == null)
+                        continue;
+
+                    if (!property.CanWrite)
+                    {
+                        // A get-only property used to be dropped with no diagnostic at all, which is
+                        // exactly the shape `[Inject] public IFoo Foo { get; }` produces.
+                        UnityEngine.Debug.LogWarning(
+                            $"[InjectionProcessor] [Inject] property '{level.Name}.{property.Name}' has no setter " +
+                            "and will not be injected; add a (private) setter.");
+                        continue;
+                    }
+
+                    // As with methods: an overridden property is declared at two levels but is one
+                    // setter. A `new`-shadowed property has a distinct base definition and is kept.
+                    var setter = property.GetSetMethod(nonPublic: true);
+                    if (setter != null)
+                    {
+                        seenPropertySetters ??= new HashSet<MethodInfo>();
+                        if (!seenPropertySetters.Add(setter.GetBaseDefinition()))
+                            continue;
+                    }
+
                     properties.Add(property);
-            }
+                }
 
-            foreach (var field in type.GetFields(flags))
-            {
-                if (field.GetCustomAttribute<InjectAttribute>() == null)
-                    continue;
+                foreach (var field in level.GetFields(flags))
+                {
+                    if (field.GetCustomAttribute<InjectAttribute>() == null)
+                        continue;
 
-                fields.Add(field);
+                    fields.Add(field);
+                }
             }
 
             return new TypeInjectionInfo(methods.ToArray(), properties.ToArray(), fields.ToArray());

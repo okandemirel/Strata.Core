@@ -56,6 +56,13 @@ namespace Strada.Core.Editor.Windows
         private List<ServiceRegistrationInfo> _filteredRegistrations = new List<ServiceRegistrationInfo>();
         private ServiceNode _hoveredNode;
 
+        // HasCircularDependency rebuilds the entire dependency graph and runs an O(V*E) cycle
+        // search, so it must not be called from OnGUI. The result is refreshed on the same
+        // cadence as the rest of the dashboard data instead.
+        private bool _hasCircularDependency;
+        private List<Type> _circularDependencyPath;
+        private double _lastCycleCheckTime = double.MinValue;
+
         private string _ecsSearchFilter = "";
         private List<int> _filteredEntityIds = new List<int>();
         private int _selectedEntityId = -1;
@@ -787,6 +794,8 @@ namespace Strada.Core.Editor.Windows
                 return;
             }
 
+            RefreshCircularDependencyCache(false);
+
             DrawDIStatsPanel();
 
             DrawDIFilterBar();
@@ -830,7 +839,7 @@ namespace Strada.Core.Editor.Windows
 
             GUILayout.FlexibleSpace();
 
-            if (_containerProvider.HasCircularDependency(out var cycle))
+            if (_hasCircularDependency)
             {
                 GUI.contentColor = _criticalColor;
                 GUILayout.Label("⚠ Circular Dependency Detected!", EditorStyles.boldLabel);
@@ -1929,11 +1938,34 @@ namespace Strada.Core.Editor.Windows
             _lastRefreshTime = EditorApplication.timeSinceStartup;
         }
 
+        /// <summary>
+        /// Recomputes the DI cycle check at most once per refresh interval.
+        /// Pass <paramref name="force"/> for user-initiated refreshes, where the answer has
+        /// to reflect the container as it is right now.
+        /// </summary>
+        private void RefreshCircularDependencyCache(bool force)
+        {
+            if (_containerProvider == null || !_containerProvider.IsAvailable)
+            {
+                _hasCircularDependency = false;
+                _circularDependencyPath = null;
+                return;
+            }
+
+            var now = EditorApplication.timeSinceStartup;
+            if (!force && now - _lastCycleCheckTime < _refreshInterval) return;
+
+            _lastCycleCheckTime = now;
+            _hasCircularDependency = _containerProvider.HasCircularDependency(out _circularDependencyPath);
+        }
+
         private void CheckForAlerts()
         {
             // Check for circular dependency in DI container
-            if (_containerProvider.IsAvailable && _containerProvider.HasCircularDependency(out var cycle))
+            RefreshCircularDependencyCache(true);
+            if (_hasCircularDependency)
             {
+                var cycle = _circularDependencyPath;
                 var cycleDesc = cycle != null ? string.Join(" -> ", cycle.Select(t => t.Name)) : "unknown";
                 if (!_alerts.Any(a => a.Message.Contains("Circular dependency in DI")))
                 {

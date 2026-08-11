@@ -531,14 +531,7 @@ namespace Strada.Core.Editor.Windows
                 {
                     foreach (var type in assembly.GetTypes())
                     {
-                        if (type.IsAbstract && type.IsSealed) // static class
-                        {
-                            ScanStaticFieldsForPools(type);
-                        }
-                        else
-                        {
-                            ScanStaticFieldsForPools(type);
-                        }
+                        ScanStaticFieldsForPools(type);
                     }
                 }
                 catch
@@ -550,31 +543,59 @@ namespace Strada.Core.Editor.Windows
 
         private void ScanStaticFieldsForPools(Type type)
         {
+            if (!IsSafeToReadStatics(type)) return;
+
             var fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             foreach (var field in fields)
             {
-                if (IsPoolField(field))
-                {
-                    try
-                    {
-                        var poolObj = field.GetValue(null);
-                        if (poolObj != null)
-                        {
-                            bool alreadyTracked = _discoveredPools.Any(p =>
-                                ReferenceEquals(p.PoolInstance, poolObj));
+                // The name heuristic in IsPoolField is fine for the fields of a single
+                // MonoBehaviour the user is looking at, but far too loose for a scan of every
+                // type in the project: it matches _poolPrefab, s_poolRoot, PoolManagerInstance
+                // and so on, and reading any of them runs that type's initializer.
+                if (!IsPoolType(field.FieldType)) continue;
 
-                            if (!alreadyTracked)
-                            {
-                                RegisterPool(poolObj, field.FieldType, type.Name, field.Name, null);
-                            }
+                try
+                {
+                    var poolObj = field.GetValue(null);
+                    if (poolObj != null)
+                    {
+                        bool alreadyTracked = _discoveredPools.Any(p =>
+                            ReferenceEquals(p.PoolInstance, poolObj));
+
+                        if (!alreadyTracked)
+                        {
+                            RegisterPool(poolObj, field.FieldType, type.Name, field.Name, null);
                         }
                     }
-                    catch
-                    {
-                        // Skip inaccessible static fields
-                    }
+                }
+                catch (Exception ex)
+                {
+                    // Swallowing this silently hides genuine type-initializer failures that
+                    // the scan itself triggered, which are otherwise impossible to diagnose.
+                    Debug.LogWarning(
+                        $"[PoolMonitor] Failed to read static field {type.FullName}.{field.Name}: {ex.Message}");
                 }
             }
+        }
+
+        /// <summary>
+        /// Determines whether this window may read a type's static fields.
+        /// Reading a static field forces the declaring type's initializer to run, so types
+        /// that declare an explicit static constructor are skipped: running arbitrary user
+        /// and third-party initialization as a side effect of a monitor refresh is not
+        /// something an editor window should do.
+        /// </summary>
+        private static bool IsSafeToReadStatics(Type type)
+        {
+            if (type == null) return false;
+
+            // Fields of an open generic type cannot be read at all.
+            if (type.ContainsGenericParameters) return false;
+
+            // BeforeFieldInit is set by the compiler exactly when there is no explicit static
+            // constructor, i.e. when initialization is nothing but field initializers.
+            return type.TypeInitializer == null ||
+                   (type.Attributes & TypeAttributes.BeforeFieldInit) != 0;
         }
 
         /// <summary>

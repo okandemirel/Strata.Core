@@ -33,6 +33,17 @@ namespace Strada.Core.Editor.Windows
         private Dictionary<Type, bool> _systemDetailFoldouts;
         private string _searchFilter = "";
 
+        // Profiler reads are per-repaint hot paths: GetSamples copies a system's whole
+        // 1000-entry buffer into a fresh List, and GetMetricsByPhase re-walks every sample of
+        // every buffer twice. Both only change when new samples are collected, so results are
+        // cached and the generation counter is bumped wherever the sample data changes.
+        private int _dataGeneration;
+        private Dictionary<UpdatePhase, List<SystemMetrics>> _metricsByPhaseCache;
+        private int _metricsCacheGeneration = -1;
+        private readonly Dictionary<Type, IReadOnlyList<SystemTimingSample>> _sampleCache =
+            new Dictionary<Type, IReadOnlyList<SystemTimingSample>>();
+        private int _sampleCacheGeneration = -1;
+
         private GUIStyle _headerStyle;
         private GUIStyle _phaseHeaderStyle;
         private GUIStyle _systemRowStyle;
@@ -372,7 +383,7 @@ namespace Strada.Core.Editor.Windows
             _showSummary = EditorGUILayout.Foldout(_showSummary, "Summary Statistics", true, EditorStyles.foldoutHeader);
             if (!_showSummary) return;
 
-            var metricsByPhase = _profiler.GetMetricsByPhase();
+            var metricsByPhase = GetCachedMetricsByPhase();
             var allMetrics = metricsByPhase.Values.SelectMany(m => m).ToList();
 
             double totalFrameTime = allMetrics.Sum(m => m.LastExecutionMs);
@@ -522,7 +533,7 @@ namespace Strada.Core.Editor.Windows
 
         private void DrawSystemsByPhase()
         {
-            var metricsByPhase = _profiler.GetMetricsByPhase();
+            var metricsByPhase = GetCachedMetricsByPhase();
 
             foreach (UpdatePhase phase in Enum.GetValues(typeof(UpdatePhase)))
             {
@@ -643,7 +654,7 @@ namespace Strada.Core.Editor.Windows
             // Background
             EditorGUI.DrawRect(rect, new Color(0.12f, 0.12f, 0.12f));
 
-            var samples = _profiler.GetSamples(systemType);
+            var samples = GetCachedSamples(systemType);
             if (samples == null || samples.Count < 2) return;
 
             // Take the last N samples
@@ -719,7 +730,7 @@ namespace Strada.Core.Editor.Windows
 
         private void DrawTimelineView()
         {
-            var metricsByPhase = _profiler.GetMetricsByPhase();
+            var metricsByPhase = GetCachedMetricsByPhase();
             var allMetrics = metricsByPhase.Values.SelectMany(m => m).ToList();
 
             if (!string.IsNullOrEmpty(_searchFilter))
@@ -744,7 +755,7 @@ namespace Strada.Core.Editor.Windows
             var systemSamplesMap = new Dictionary<Type, IReadOnlyList<SystemTimingSample>>();
             foreach (var m in allMetrics)
             {
-                var samples = _profiler.GetSamples(m.SystemType);
+                var samples = GetCachedSamples(m.SystemType);
                 systemSamplesMap[m.SystemType] = samples;
 
                 if (samples.Count > 0)
@@ -970,6 +981,7 @@ namespace Strada.Core.Editor.Windows
             RefreshSystemList();
             _profiler.StartRecording();
             _isRecording = true;
+            InvalidateProfilerCaches();
         }
 
         private void StopRecording()
@@ -982,6 +994,7 @@ namespace Strada.Core.Editor.Windows
         {
             _profiler.Clear();
             _activeAlerts.Clear();
+            InvalidateProfilerCaches();
             Repaint();
         }
 
@@ -1093,6 +1106,7 @@ namespace Strada.Core.Editor.Windows
             if (EditorApplication.timeSinceStartup - _lastUpdateTime > _updateInterval)
             {
                 CollectTimingSamples();
+                _dataGeneration++;
                 _lastUpdateTime = EditorApplication.timeSinceStartup;
 
                 // Check for critical alerts after collecting samples
@@ -1101,6 +1115,53 @@ namespace Strada.Core.Editor.Windows
 
                 Repaint();
             }
+        }
+
+        /// <summary>
+        /// Returns the per-phase metrics for the current sample generation, computing them
+        /// at most once per collection tick. OnGUI asks for these from two panels, and each
+        /// call re-walks every sample of every system twice.
+        /// </summary>
+        private Dictionary<UpdatePhase, List<SystemMetrics>> GetCachedMetricsByPhase()
+        {
+            if (_metricsByPhaseCache == null || _metricsCacheGeneration != _dataGeneration)
+            {
+                _metricsByPhaseCache = _profiler.GetMetricsByPhase();
+                _metricsCacheGeneration = _dataGeneration;
+            }
+
+            return _metricsByPhaseCache;
+        }
+
+        /// <summary>
+        /// Returns a system's samples for the current sample generation. The underlying
+        /// GetSamples copies the whole circular buffer, so calling it once per system row per
+        /// repaint - repaints the mouse alone can generate - is not affordable.
+        /// </summary>
+        private IReadOnlyList<SystemTimingSample> GetCachedSamples(Type systemType)
+        {
+            if (_sampleCacheGeneration != _dataGeneration)
+            {
+                _sampleCache.Clear();
+                _sampleCacheGeneration = _dataGeneration;
+            }
+
+            if (!_sampleCache.TryGetValue(systemType, out var samples))
+            {
+                samples = _profiler.GetSamples(systemType);
+                _sampleCache[systemType] = samples;
+            }
+
+            return samples;
+        }
+
+        /// <summary>
+        /// Discards the cached metrics and samples. Call wherever the profiler's sample data
+        /// changes outside the collection tick.
+        /// </summary>
+        private void InvalidateProfilerCaches()
+        {
+            _dataGeneration++;
         }
     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -6,6 +7,11 @@ namespace Strada.Core.DI
 {
     public sealed class ContainerScope : IContainerScope, IIndexResolver
     {
+        // Written into a scoped slot by Dispose(). A resolve that started before _disposed was set
+        // will then lose its publishing CAS instead of storing a live instance into a slot the
+        // disposer has already walked past — which used to leak that instance for good.
+        private static readonly object DisposedSlot = new object();
+
         private readonly Container _parent;
         private readonly Func<IIndexResolver, object>[] _factories;
         private readonly Func<IIndexResolver, object>[] _scopedFactories;
@@ -16,6 +22,13 @@ namespace Strada.Core.DI
         private readonly object[] _scopedInstances;
         private volatile bool _disposed;
         private readonly object _disposeLock = new object();
+
+        // [TrackTransientDisposal] transients created through this scope. Allocated on first use —
+        // the attribute is opt-in and most scopes never see one.
+        private List<IDisposable> _trackedTransients;
+
+        // The handle the owning container holds us by, so Dispose() can drop it.
+        private WeakReference<ContainerScope> _ownerHandle;
 
         public IContainer Parent => _parent;
 
@@ -36,6 +49,25 @@ namespace Strada.Core.DI
             _maxTypeId = maxTypeId;
             _parentSingletons = parentSingletons;
             _scopedInstances = new object[factories.Length];
+        }
+
+        internal void AttachOwnerHandle(WeakReference<ContainerScope> handle) => _ownerHandle = handle;
+
+        /// <summary>
+        /// Takes ownership of a <c>[TrackTransientDisposal]</c> transient created through this scope.
+        /// </summary>
+        internal void TrackDisposable(IDisposable disposable)
+        {
+            lock (_disposeLock)
+            {
+                if (_disposed)
+                {
+                    disposable.Dispose();
+                    throw new ObjectDisposedException(nameof(ContainerScope));
+                }
+
+                (_trackedTransients ??= new List<IDisposable>(4)).Add(disposable);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -68,8 +100,18 @@ namespace Strada.Core.DI
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public object ResolveByIndex(int index)
+        object IIndexResolver.ResolveByIndex(int index) => ResolveByIndex(index);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal object ResolveByIndex(int index)
         {
+            // Compiled factories reach this directly through IIndexResolver, bypassing the checks
+            // in ResolveById, so both guards belong here too.
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(ContainerScope));
+            if ((uint)index >= (uint)_lifetimes.Length)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
             var lifetime = _lifetimes[index];
 
             if (lifetime == Lifetime.Singleton)
@@ -85,7 +127,11 @@ namespace Strada.Core.DI
             {
                 var existing = Volatile.Read(ref _scopedInstances[index]);
                 if (existing != null)
+                {
+                    if (ReferenceEquals(existing, DisposedSlot))
+                        throw new ObjectDisposedException(nameof(ContainerScope));
                     return existing;
+                }
 
                 var instance = _scopedFactories[index](this);
 
@@ -93,7 +139,20 @@ namespace Strada.Core.DI
                 if (prev != null)
                 {
                     (instance as IDisposable)?.Dispose();
+                    if (ReferenceEquals(prev, DisposedSlot))
+                        throw new ObjectDisposedException(nameof(ContainerScope));
                     return prev;
+                }
+
+                // Dispose() may have started between the _disposed check above and the CAS. If it
+                // has, claim the slot back so this instance is disposed exactly once — either here,
+                // or by the disposer if it already swapped the sentinel in.
+                if (_disposed)
+                {
+                    var claimed = Interlocked.CompareExchange(ref _scopedInstances[index], DisposedSlot, instance);
+                    if (ReferenceEquals(claimed, instance))
+                        (instance as IDisposable)?.Dispose();
+                    throw new ObjectDisposedException(nameof(ContainerScope));
                 }
 
                 return instance;
@@ -127,7 +186,9 @@ namespace Strada.Core.DI
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ContainerScope));
 
-            return new ContainerScope(_parent, _factories, _scopedFactories, _lifetimes, _typeIdToIndex, _maxTypeId, _parentSingletons);
+            // Child scopes are rooted at the same container, so route through it: that is what
+            // registers the new scope for teardown when the container is disposed.
+            return _parent.CreateScope();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -157,11 +218,22 @@ namespace Strada.Core.DI
 
                 for (int i = 0; i < _scopedInstances.Length; i++)
                 {
-                    var instance = Volatile.Read(ref _scopedInstances[i]);
+                    // Swap in the sentinel rather than null: a concurrent resolve that already
+                    // passed the _disposed check must fail its CAS on a slot we have walked past.
+                    var instance = Interlocked.Exchange(ref _scopedInstances[i], DisposedSlot);
                     (instance as IDisposable)?.Dispose();
-                    _scopedInstances[i] = null;
+                }
+
+                if (_trackedTransients != null)
+                {
+                    for (int i = _trackedTransients.Count - 1; i >= 0; i--)
+                        _trackedTransients[i].Dispose();
+                    _trackedTransients.Clear();
                 }
             }
+
+            _parent.UnregisterScope(_ownerHandle);
+            _ownerHandle = null;
         }
     }
 }

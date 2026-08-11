@@ -69,8 +69,19 @@ namespace Strada.Core.ECS.Systems
 
             if (_commandBufferCreated)
             {
-                _commandBuffer.Playback(EntityManager);
-                _commandBuffer.Clear();
+                // Clear in a finally: Playback throws on a bad deferred index, a stream
+                // overflow, a component size mismatch, or — most easily — a SetComponent whose
+                // target lost that component between recording and playback. Skipping the Clear
+                // would leave the whole stream buffered, so every subsequent frame would replay
+                // the failing command again and append that frame's recording on top of it.
+                try
+                {
+                    _commandBuffer.Playback(EntityManager);
+                }
+                finally
+                {
+                    _commandBuffer.Clear();
+                }
             }
 
             _lastJobHandle = OnSchedule(deltaTime, _lastJobHandle);
@@ -138,8 +149,15 @@ namespace Strada.Core.ECS.Systems
         {
             if (_commandBufferCreated)
             {
-                _commandBuffer.Playback(EntityManager);
-                _commandBuffer.Clear();
+                // See OnUpdate: a Playback that throws must still leave the stream empty.
+                try
+                {
+                    _commandBuffer.Playback(EntityManager);
+                }
+                finally
+                {
+                    _commandBuffer.Clear();
+                }
             }
         }
     }

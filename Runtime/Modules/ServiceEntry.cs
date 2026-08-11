@@ -49,13 +49,45 @@ namespace Strada.Core.Modules
         public Type GetInterfaceType()
         {
             var interfaceType = _interfaceType?.Type;
-            return interfaceType ?? _implementationType?.Type;
+            return interfaceType ?? GetImplementationType();
         }
 
         /// <summary>
-        /// Gets the resolved implementation Type.
+        /// Gets the resolved implementation Type, validated against the configured interface.
+        /// Returns <c>null</c> (and logs an error) when the serialized name resolves to something
+        /// the container must not be asked to construct.
         /// </summary>
-        public Type GetImplementationType() => _implementationType?.Type;
+        /// <remarks>
+        /// The assembly-qualified name behind this entry comes out of a serialized asset, so a
+        /// tampered .asset or AssetBundle can name any type in any loaded assembly. Whatever comes
+        /// back is handed straight to <c>ContainerBuilder.Register</c> and constructed on first
+        /// resolve, so the relationship the entry claims is verified here rather than trusted —
+        /// the same defence <see cref="SystemEntry.GetSystemType"/> gets from
+        /// <see cref="SerializableType.AsType{TBase}"/>.
+        /// </remarks>
+        public Type GetImplementationType()
+        {
+            if (_implementationType == null) return null;
+
+            var interfaceType = _interfaceType?.Type;
+            var implType = interfaceType != null
+                ? _implementationType.AsType(interfaceType)  // Logs and rejects if it does not implement the declared interface.
+                : _implementationType.Type;
+
+            if (implType == null) return null;
+
+            // With no interface configured the caller takes the Register<T>() branch, whose only
+            // constraint is `where T : class` — nothing else would stop an abstract type, an
+            // interface, or an open generic from reaching Activator/the compiled factory.
+            if (implType.IsInterface || implType.IsAbstract || implType.IsValueType || implType.ContainsGenericParameters)
+            {
+                Debug.LogError(
+                    $"[ServiceEntry] Implementation type '{implType.FullName}' is not a concrete, closed reference type; rejected.");
+                return null;
+            }
+
+            return implType;
+        }
 
         /// <summary>
         /// Gets whether this entry has a valid implementation type assigned.

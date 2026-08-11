@@ -12,6 +12,8 @@ namespace Strada.Core.Logging
     public sealed class StradaLogSettings : ScriptableObject
     {
         private const string ResourcePath = "StradaLogSettings";
+        private const int MinLogEntries = 100;
+        private static readonly object _instanceLock = new object();
         private static StradaLogSettings _instance;
 
         [Header("General")]
@@ -22,6 +24,7 @@ namespace Strada.Core.Logging
         [SerializeField] private bool _deepLogsEnabled;
 
         [Tooltip("Maximum number of log entries to store in the buffer.")]
+        [Min(MinLogEntries)]
         [SerializeField] private int _maxLogEntries = 1000;
 
         [Header("Background Colors")]
@@ -51,18 +54,42 @@ namespace Strada.Core.Logging
         {
             get
             {
-                if (_instance == null)
-                {
-                    _instance = Resources.Load<StradaLogSettings>(ResourcePath);
+                var cached = _instance;
+                if (cached != null) return cached;
 
-                    if (_instance == null)
+                // Two threads racing the lazy path each built a settings object and published
+                // whichever finished last, so callers could hold different instances.
+                lock (_instanceLock)
+                {
+                    if (_instance != null) return _instance;
+
+                    var loaded = Resources.Load<StradaLogSettings>(ResourcePath);
+
+                    if (loaded == null)
                     {
-                        _instance = CreateInstance<StradaLogSettings>();
-                        _instance.InitializeDefaults();
+                        loaded = CreateInstance<StradaLogSettings>();
+                        loaded.InitializeDefaults();
                     }
+
+                    _instance = loaded;
+                    return loaded;
                 }
-                return _instance;
             }
+        }
+
+        /// <summary>
+        /// Resolves the settings instance on the main thread during startup.
+        /// </summary>
+        /// <remarks>
+        /// Resources.Load and ScriptableObject.CreateInstance may only be called from Unity's
+        /// main thread, but StradaLog is explicitly built for concurrent use and reaches this
+        /// property from every log call. Materialising the instance here means a worker thread
+        /// can never be the one that takes the lazy path.
+        /// </remarks>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+        private static void PreloadOnMainThread()
+        {
+            _ = Instance;
         }
 
         /// <summary>
@@ -89,7 +116,21 @@ namespace Strada.Core.Logging
         public int MaxLogEntries
         {
             get => _maxLogEntries;
-            set => _maxLogEntries = Mathf.Max(100, value);
+            set => _maxLogEntries = Mathf.Max(MinLogEntries, value);
+        }
+
+        /// <summary>
+        /// Keeps the serialized field within range.
+        /// </summary>
+        /// <remarks>
+        /// The inspector writes the backing field directly and never goes through the clamping
+        /// setter, so a hand-typed 0 would reach StradaLog.AddToBuffer and divide by zero on the
+        /// first log call — taking out logging entirely until the asset is edited again.
+        /// </remarks>
+        private void OnValidate()
+        {
+            if (_maxLogEntries < MinLogEntries)
+                _maxLogEntries = MinLogEntries;
         }
 
         /// <summary>

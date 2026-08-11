@@ -86,14 +86,28 @@ namespace Strada.Core.Logging
             {
                 var line = lines[i];
 
-                if (line.Contains("StradaLog.") || line.Contains("UnityEngine.Debug"))
+                // Unity's StackTraceUtility renders frames as "Ns.Type:Method ()", so the frames
+                // belonging to the logger itself carry a colon, not a dot, after the type name.
+                if (line.Contains("StradaLog.") || line.Contains("StradaLog:") || line.Contains("UnityEngine.Debug"))
                     continue;
 
+                // " (at Assets/Foo.cs:42)" is Unity's format. Mono's BCL rendering instead ends
+                // with "[0x00000] in /path/Foo.cs:42", so both tokens are accepted: a LogEntry
+                // can be constructed from either kind of trace.
+                int pathStart;
                 int atIndex = line.IndexOf(" (at ", StringComparison.Ordinal);
-                if (atIndex < 0)
-                    continue;
+                if (atIndex >= 0)
+                {
+                    pathStart = atIndex + 5;
+                }
+                else
+                {
+                    int inIndex = line.IndexOf("] in ", StringComparison.Ordinal);
+                    if (inIndex < 0)
+                        continue;
+                    pathStart = inIndex + 5;
+                }
 
-                int pathStart = atIndex + 5;
                 int colonIndex = line.LastIndexOf(':');
                 if (colonIndex <= pathStart)
                     continue;
@@ -104,7 +118,9 @@ namespace Strada.Core.Logging
 
                 FilePath = line.Substring(pathStart, colonIndex - pathStart);
 
-                var lineNumberStr = line.Substring(colonIndex + 1, closeParenIndex - colonIndex - 1);
+                // The BCL form has no trailing ')', so the number runs to the end of the line and
+                // picks up the '\r' of a CRLF-separated trace.
+                var lineNumberStr = line.Substring(colonIndex + 1, closeParenIndex - colonIndex - 1).Trim();
                 if (int.TryParse(lineNumberStr, out int parsedLine))
                 {
                     LineNumber = parsedLine;

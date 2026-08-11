@@ -135,8 +135,21 @@ namespace Strada.Core.Patterns
             OnDispose();
 
             // Dispose in LIFO order so later-acquired resources release before earlier ones.
+            // The list mixes framework-owned SubscriptionTokens with arbitrary user objects from
+            // AddDisposable, so one throwing item must not abort the loop: _disposed is already
+            // set and Dispose cannot be retried, which would leave every remaining EventBus
+            // subscription live and this torn-down instance still receiving events forever.
             for (int i = _disposables.Count - 1; i >= 0; i--)
-                _disposables[i].Dispose();
+            {
+                try
+                {
+                    _disposables[i]?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogException(ex);
+                }
+            }
             _disposables.Clear();
 
             GC.SuppressFinalize(this);

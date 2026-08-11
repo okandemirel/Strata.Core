@@ -48,6 +48,17 @@ namespace Strada.Core.Editor.Windows
         private float _playbackSpeed = 1.0f;
         private double _lastPlaybackTime;
 
+        // WorldSnapshot.Capture boxes every component of every entity, so it must not run at
+        // the raw editor tick rate. Snapshots are sampled on this interval instead.
+        private const float DefaultCaptureInterval = 1f / 60f;
+        private float _captureInterval = DefaultCaptureInterval;
+        private double _lastCaptureTime;
+
+        // Scratch buffers for the timeline bar. These are sized to the snapshot count and
+        // reused; allocating them inside OnGUI meant a fresh int[] and Vector3[] per repaint.
+        private int[] _entityCountBuffer = Array.Empty<int>();
+        private Vector3[] _sparklineBuffer = Array.Empty<Vector3>();
+
         // Annotations / bookmarks per frame index
         private Dictionary<int, string> _annotations = new Dictionary<int, string>();
 
@@ -119,7 +130,14 @@ namespace Strada.Core.Editor.Windows
 
             if (_isRecording && !_isReplaying)
             {
-                RecordSnapshot();
+                double captureTime = EditorApplication.timeSinceStartup;
+                if (captureTime - _lastCaptureTime >= _captureInterval)
+                {
+                    _lastCaptureTime = captureTime;
+                    RecordSnapshot();
+                }
+
+                Repaint();
             }
 
             if (_isPlayingRecording && _isReplaying)
@@ -135,9 +153,12 @@ namespace Strada.Core.Editor.Windows
                         _isPlayingRecording = false;
                     }
                 }
+
+                Repaint();
             }
 
-            Repaint();
+            // An idle window has nothing changing behind it, so repainting here would only
+            // burn editor frames redrawing the same timeline.
         }
 
         private void OnGUI()
@@ -210,6 +231,14 @@ namespace Strada.Core.Editor.Windows
             GUILayout.Label("Max:", EditorStyles.miniLabel, GUILayout.Width(28));
             _maxSnapshots = EditorGUILayout.IntField(_maxSnapshots, EditorStyles.toolbarTextField, GUILayout.Width(50));
             _maxSnapshots = Mathf.Max(10, _maxSnapshots);
+
+            GUILayout.Space(8);
+
+            // Capture rate control (seconds between snapshots)
+            GUILayout.Label("Every:", EditorStyles.miniLabel, GUILayout.Width(38));
+            _captureInterval = EditorGUILayout.FloatField(_captureInterval, EditorStyles.toolbarTextField, GUILayout.Width(50));
+            _captureInterval = Mathf.Clamp(_captureInterval, DefaultCaptureInterval, 5f);
+            GUILayout.Label("s", EditorStyles.miniLabel, GUILayout.Width(10));
 
             GUILayout.FlexibleSpace();
             GUILayout.Label($"Snapshots: {_snapshots.Count}/{_maxSnapshots}");
@@ -329,8 +358,13 @@ namespace Strada.Core.Editor.Windows
             int count = _snapshots.Count;
             if (count == 0) return;
 
-            // Compute entity counts
-            int[] entityCounts = new int[count];
+            // Compute entity counts into the reusable buffer
+            if (_entityCountBuffer.Length < count)
+            {
+                _entityCountBuffer = new int[count];
+            }
+            int[] entityCounts = _entityCountBuffer;
+
             int minCount = int.MaxValue;
             int maxCount = 0;
             for (int i = 0; i < count; i++)
@@ -369,7 +403,12 @@ namespace Strada.Core.Editor.Windows
             // Draw sparkline overlay
             if (count > 1)
             {
-                Vector3[] points = new Vector3[count];
+                if (_sparklineBuffer.Length < count)
+                {
+                    _sparklineBuffer = new Vector3[count];
+                }
+                Vector3[] points = _sparklineBuffer;
+
                 float padding = 4f;
                 float usableHeight = rect.height - padding * 2;
 
@@ -382,7 +421,9 @@ namespace Strada.Core.Editor.Windows
                 }
 
                 Handles.color = new Color(1f, 1f, 1f, 0.9f);
-                Handles.DrawAAPolyLine(2f, points);
+                // The buffer can be longer than the snapshot count, so the point count has to
+                // be passed explicitly or stale trailing points would be drawn.
+                Handles.DrawAAPolyLine(2f, count, points);
             }
 
             // Draw playhead
@@ -453,29 +494,14 @@ namespace Strada.Core.Editor.Windows
             int count = _snapshots.Count;
             if (count < 2) return;
 
-            float segWidth = rect.width / Mathf.Max(1, count);
-
             for (int i = 1; i < count; i++)
             {
-                var prevIndices = _snapshots[i - 1].ActiveIndices;
-                var currIndices = _snapshots[i].ActiveIndices;
+                // The flags are computed once against the preceding snapshot at capture time.
+                // Recomputing them here built two HashSets per snapshot pair per repaint.
+                bool hasCreated = _snapshots[i].HasEntityCreations;
+                bool hasDestroyed = _snapshots[i].HasEntityDestructions;
 
-                if (prevIndices == null || currIndices == null) continue;
-
-                var prevSet = new HashSet<int>(prevIndices);
-                var currSet = new HashSet<int>(currIndices);
-
-                bool hasCreated = false;
-                bool hasDestroyed = false;
-
-                foreach (int id in currIndices)
-                {
-                    if (!prevSet.Contains(id)) { hasCreated = true; break; }
-                }
-                foreach (int id in prevIndices)
-                {
-                    if (!currSet.Contains(id)) { hasDestroyed = true; break; }
-                }
+                if (!hasCreated && !hasDestroyed) continue;
 
                 float x = rect.x + ((float)i / Mathf.Max(1, maxFrame)) * rect.width;
 
@@ -854,6 +880,13 @@ namespace Strada.Core.Editor.Windows
             var snapshot = new WorldSnapshot();
             snapshot.Capture(World.Current);
 
+            // Entity creation/destruction relative to the previous frame is fixed the moment
+            // the snapshot is taken, so the timeline marker row can just read the result.
+            if (_snapshots.Count > 0)
+            {
+                snapshot.ComputeLifecycleFlags(_snapshots[_snapshots.Count - 1]);
+            }
+
             _snapshots.Add(snapshot);
             if (_snapshots.Count > _maxSnapshots)
             {
@@ -890,6 +923,18 @@ namespace Strada.Core.Editor.Windows
         public int[] ActiveIndices;
         public int[] Versions;
 
+        /// <summary>
+        /// True when this snapshot contains entities that did not exist in the preceding one.
+        /// Set by <see cref="ComputeLifecycleFlags"/> at capture time.
+        /// </summary>
+        public bool HasEntityCreations;
+
+        /// <summary>
+        /// True when the preceding snapshot contained entities that are gone from this one.
+        /// Set by <see cref="ComputeLifecycleFlags"/> at capture time.
+        /// </summary>
+        public bool HasEntityDestructions;
+
         private Dictionary<int, Dictionary<Type, object>> _entityData = new Dictionary<int, Dictionary<Type, object>>();
 
         /// <summary>
@@ -920,6 +965,34 @@ namespace Strada.Core.Editor.Windows
                     }
                 }
                 _entityData[entityId] = components;
+            }
+        }
+
+        /// <summary>
+        /// Records whether entities were created or destroyed between <paramref name="previous"/>
+        /// and this snapshot. Done once per capture so the timeline does not have to diff
+        /// entity index arrays on every repaint.
+        /// </summary>
+        internal void ComputeLifecycleFlags(WorldSnapshot previous)
+        {
+            HasEntityCreations = false;
+            HasEntityDestructions = false;
+
+            var prevIndices = previous?.ActiveIndices;
+            var currIndices = ActiveIndices;
+
+            if (prevIndices == null || currIndices == null) return;
+
+            var prevSet = new HashSet<int>(prevIndices);
+            foreach (int id in currIndices)
+            {
+                if (!prevSet.Contains(id)) { HasEntityCreations = true; break; }
+            }
+
+            var currSet = new HashSet<int>(currIndices);
+            foreach (int id in prevIndices)
+            {
+                if (!currSet.Contains(id)) { HasEntityDestructions = true; break; }
             }
         }
 

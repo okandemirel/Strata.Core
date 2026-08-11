@@ -47,7 +47,19 @@ namespace Strada.Core.Data
                 "ConfigData<T>.Data cannot be set to null; use a default instance instead.");
         }
 
-        public ref T GetDataRef() => ref _data;
+        /// <summary>
+        /// Returns a read-only reference to the backing payload, avoiding a copy for large data.
+        /// </summary>
+        /// <remarks>
+        /// This used to hand out a writable ref to the field, so `config.GetDataRef() = null;`
+        /// nulled shared config state and bypassed the null guard on the Data setter entirely.
+        /// A readonly ref keeps the zero-copy read while leaving replacement to the setter.
+        /// </remarks>
+        public ref readonly T GetDataRef()
+        {
+            _data ??= new T();
+            return ref _data;
+        }
     }
 
     [Serializable]

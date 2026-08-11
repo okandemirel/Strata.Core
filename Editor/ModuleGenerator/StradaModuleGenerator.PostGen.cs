@@ -27,8 +27,26 @@ namespace Strada.Core.Editor.ModuleGenerator
 
         private static void ProcessPendingOperations()
         {
-            ProcessPendingModuleConfigAsset();
-            ProcessPendingBootstrapperRegistration();
+            // This runs from [DidReloadScripts]/[InitializeOnLoad]; an escaping exception there
+            // is reported without any indication of which module caused it, and would also stop
+            // the second step from running.
+            try
+            {
+                ProcessPendingModuleConfigAsset();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[StradaGenerator] Failed to create pending ModuleConfig asset: {ex}");
+            }
+
+            try
+            {
+                ProcessPendingBootstrapperRegistration();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[StradaGenerator] Failed to register pending module in bootstrapper: {ex}");
+            }
         }
 
         private static void ProcessPendingModuleConfigAsset()
@@ -42,7 +60,7 @@ namespace Strada.Core.Editor.ModuleGenerator
             EditorPrefs.DeleteKey("Strada_PendingModuleConfigAsset");
 
             var configType = FindType(data.ConfigClassName, data.Namespace);
-            if (configType == null)
+            if (configType == null || !typeof(ModuleConfig).IsAssignableFrom(configType))
             {
                 Debug.LogWarning($"[StradaGenerator] Could not find ModuleConfig type: {data.ConfigClassName}");
                 return;
@@ -174,7 +192,12 @@ namespace Strada.Core.Editor.ModuleGenerator
                     if (type != null)
                         return type;
 
-                    type = assembly.GetTypes().FirstOrDefault(t => t.Name == typeName);
+                    // Simple-name fallback for the case where the namespace was not what the
+                    // generator recorded. It must stay constrained to ModuleConfig: without the
+                    // assignability test any unrelated class sharing the name wins, and the
+                    // result is handed straight to ScriptableObject.CreateInstance.
+                    type = assembly.GetTypes().FirstOrDefault(
+                        t => t.Name == typeName && typeof(ModuleConfig).IsAssignableFrom(t));
                     if (type != null)
                         return type;
                 }

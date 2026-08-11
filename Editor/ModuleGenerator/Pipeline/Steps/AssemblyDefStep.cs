@@ -1,8 +1,12 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using Strada.Core.Editor.ModuleGenerator.Models;
 using UnityEditor;
+using UnityEngine;
 
 namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
 {
@@ -13,6 +17,11 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
     {
         public string Name => "Assembly Definition";
         public int Order => 20;
+
+        // Same shape FileGenerationStep enforces, but this step runs first (Order 20 vs 30), so
+        // without its own check the namespace reaches the .asmdef before anything validates it.
+        private static readonly Regex ValidNamespaceRegex =
+            new Regex(@"^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*$", RegexOptions.Compiled);
 
         public bool CanExecute(GenerationContext context)
         {
@@ -25,6 +34,9 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
             var basePath = context.Definition.FullPath;
             var name = context.Definition.ModuleName;
             var ns = context.Definition.FullNamespace;
+
+            if (string.IsNullOrEmpty(ns) || !ValidNamespaceRegex.IsMatch(ns))
+                return StepResult.Error($"Invalid namespace '{ns}': must contain only valid C# identifier characters");
 
             var references = new List<string> { "Strada.Core" };
 
@@ -92,14 +104,14 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
             string[] precompiledReferences = null,
             string[] defineConstraints = null)
         {
-            var refsJson = string.Join(",\n        ", references.Select(r => $"\"{r}\""));
+            var refsJson = string.Join(",\n        ", references.Select(r => $"\"{EscapeJson(r)}\""));
             var platformsJson = FormatJsonArray(includePlatforms);
             var precompiledJson = FormatJsonArray(precompiledReferences);
             var constraintsJson = FormatJsonArray(defineConstraints);
 
             var content = $@"{{
-    ""name"": ""{asmName}"",
-    ""rootNamespace"": ""{rootNamespace}"",
+    ""name"": ""{EscapeJson(asmName)}"",
+    ""rootNamespace"": ""{EscapeJson(rootNamespace)}"",
     ""references"": [
         {refsJson}
     ],
@@ -114,14 +126,79 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
     ""noEngineReferences"": false
 }}";
 
-            File.WriteAllText(path, content);
-            context.AddCreatedFile(path);
+            // This step runs before FileGenerationStep, so its containment guard has not run yet
+            // and an unvalidated TargetPath would otherwise write an .asmdef anywhere on disk.
+            var fullPath = Path.GetFullPath(path);
+            if (!IsInsideAssetsFolder(fullPath))
+                throw new InvalidOperationException($"Path outside project: {fullPath}");
+
+            var dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            File.WriteAllText(fullPath, content);
+            context.AddCreatedFile(fullPath);
+        }
+
+        private static bool IsInsideAssetsFolder(string fullPath)
+        {
+            string assetsRoot;
+            try
+            {
+                assetsRoot = Path.GetFullPath(Application.dataPath);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            assetsRoot = assetsRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                         + Path.DirectorySeparatorChar;
+
+            // Ordinal plus a trailing separator: without the separator "AssetsEvil/" would
+            // prefix-match the Assets root, and containment must not be culture sensitive.
+            return fullPath.StartsWith(assetsRoot, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Escapes a value for embedding in a JSON string literal, so a name containing a quote
+        /// or backslash cannot break out and inject sibling keys into the .asmdef.
+        /// </summary>
+        private static string EscapeJson(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+
+            var sb = new StringBuilder(value.Length);
+            foreach (var c in value)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ')
+                            sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else
+                            sb.Append(c);
+                        break;
+                }
+            }
+
+            return sb.ToString();
         }
 
         private static string FormatJsonArray(string[] items)
         {
             if (items == null || items.Length == 0) return "";
-            return "\n        " + string.Join(",\n        ", items.Select(i => $"\"{i}\"")) + "\n    ";
+            return "\n        " + string.Join(",\n        ", items.Select(i => $"\"{EscapeJson(i)}\"")) + "\n    ";
         }
     }
 }

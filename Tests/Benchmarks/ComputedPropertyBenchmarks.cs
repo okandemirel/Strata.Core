@@ -62,6 +62,15 @@ namespace Strada.Core.Tests.Benchmarks
             UnityEngine.Debug.Log($"  Avg: {avgNs:F0}ns per update");
             UnityEngine.Debug.Log($"  Notifications triggered: {subscribeCallCount}");
 
+            // Nothing else in this method reads the computed value, so without these the whole
+            // recomputation the benchmark claims to time is an unobserved side effect.
+            int expected = 0;
+            for (int i = 0; i < dependencyCount; i++)
+                expected += dependencies[i].Value;
+
+            Assert.AreEqual(expected, computed.Value, "Computed value must track its dependencies");
+            Assert.Greater(subscribeCallCount, 0, "Dependency writes must have propagated");
+
             // Cleanup
             computed.Dispose();
             foreach (var dep in dependencies)
@@ -99,6 +108,12 @@ namespace Strada.Core.Tests.Benchmarks
             UnityEngine.Debug.Log($"[ComputedProperty] Value Access (cached) ({iterations} reads):");
             UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
             UnityEngine.Debug.Log($"  Avg: {avgNs:F1}ns per read");
+
+            // `sum` was written 10,000 times and never read — a provably dead store, and the
+            // property reads feeding it are legally removable. At the ~5ns/read this benchmark
+            // publishes, a dead-code-eliminated loop is indistinguishable from a fast one.
+            // Asserting the accumulated total roots every read.
+            Assert.AreEqual((dep1.Value + dep2.Value) * iterations, sum, "Cached reads must return the computed value");
 
             computed.Dispose();
             dep1.Dispose();
@@ -145,6 +160,11 @@ namespace Strada.Core.Tests.Benchmarks
             UnityEngine.Debug.Log($"  Total Time: {sw.ElapsedMilliseconds}ms");
             UnityEngine.Debug.Log($"  Avg: {avgNs:F0}ns per update");
             UnityEngine.Debug.Log($"  Final computed value: {finalValue}");
+
+            // Each link adds one, so the tail must be source + chainLength. A chain that stopped
+            // propagating partway would still produce a plausible-looking timing.
+            Assert.AreEqual(source.Value + chainLength, finalValue, "The last write must reach the end of the chain");
+            Assert.AreEqual(finalValue, computedChain[chainLength - 1].Value);
 
             // Cleanup
             foreach (var c in computedChain)

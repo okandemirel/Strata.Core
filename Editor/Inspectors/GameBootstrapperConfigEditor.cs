@@ -203,7 +203,11 @@ namespace Strada.Core.Editor.Inspectors
 
             if (GUILayout.Button("View Dependency Graph"))
             {
-                EditorApplication.ExecuteMenuItem("Strada/Dependency Graph");
+                // Called directly rather than through ExecuteMenuItem: the window is registered
+                // under "Strada/Debugger/Dependency Graph", so the old path resolved to nothing
+                // and the button silently did nothing but log a "menu not found" error. A direct
+                // call is also the only form the compiler can check.
+                Graph.DependencyGraphWindow.ShowWindow();
             }
 
             EditorGUILayout.EndHorizontal();

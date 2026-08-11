@@ -38,8 +38,12 @@ namespace Strada.Core.Bootstrap
         [Tooltip("Game bootstrapper configuration")]
         [SerializeField] private GameBootstrapperConfig _gameConfig;
 
-        [Header("Runtime State")]
-        [SerializeField] private bool _isInitialized;
+        // Deliberately NOT serialized. This is pure runtime state, and it is simultaneously the
+        // guard for the per-frame update methods, for Shutdown(), and for the public Initialize().
+        // Persisting it in the prefab/scene asset let a stray Inspector checkbox make all three
+        // guards lie at once — a stale `true` tears down state that was never built.
+        private bool _isInitialized;
+        private bool _playerLoopInitialized;
 
         private readonly List<ModuleConfig> _initializedModuleConfigs = new List<ModuleConfig>();
         private List<ModuleConfig> _sortedModules;
@@ -125,6 +129,7 @@ namespace Strada.Core.Bootstrap
             }
 
             PlayerLoop.Initialize();
+            _playerLoopInitialized = true;
             StartCoroutine(InitializeAsync());
         }
 
@@ -281,7 +286,11 @@ namespace Strada.Core.Bootstrap
             ECS.World.World.Current = _world;
 
             _systemRunner = new SystemRunner(_world.EntityManager, _world.EventBus, _sharedHandleRegistry, _container);
-            _systemRunner.AddSystemsFromConfigs(_gameConfig.GetEnabledModules());
+            // Use the same deduplicated, topologically sorted list that Install and Initialize use.
+            // Re-querying GetEnabledModules() here returned the raw (undeduplicated) enumeration,
+            // so a module listed twice had all of its systems instantiated and ticked twice while
+            // Install/Initialize ran once.
+            _systemRunner.AddSystemsFromConfigs(_sortedModules);
 
             Log($"World created with {_systemRunner.SystemCount} systems");
         }
@@ -345,33 +354,65 @@ namespace Strada.Core.Bootstrap
             catch (Exception ex)
             {
                 error = ex;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogError($"[GameBootstrapper] {phaseName} failed: {ex}");
-#else
-                Debug.LogError($"[GameBootstrapper] {phaseName} failed: {ex.Message}");
-#endif
-                StradaLog.LogError($"{phaseName} failed: {ex.Message}\n{ex.StackTrace}", LogModule.Bootstrap);
+                var detail = DescribeFailure($"{phaseName} failed", ex);
+                Debug.LogError($"[GameBootstrapper] {detail}");
+                StradaLog.LogError(detail, LogModule.Bootstrap);
                 return false;
             }
         }
 
         private void HandleInitializationError(Exception ex)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.LogError($"[GameBootstrapper] Initialization failed: {ex}");
-#else
-            Debug.LogError($"[GameBootstrapper] Initialization failed: {ex.Message}");
-#endif
+            var detail = DescribeFailure("Initialization failed", ex);
+            Debug.LogError($"[GameBootstrapper] {detail}");
             DisposeResources();
-            StradaLog.LogError($"Initialization failed: {ex.Message}\n{ex.StackTrace}", LogModule.Bootstrap);
+            StradaLog.LogError(detail, LogModule.Bootstrap);
             OnInitializationFailed?.Invoke(ex);
             _isInitialized = false;
+        }
+
+        /// <summary>
+        /// Builds the failure text once so that the release build cannot leak a stack trace.
+        /// </summary>
+        /// <remarks>
+        /// StradaLog.LogError carries no [Conditional] attribute and is not compiled out in
+        /// release, so appending ex.StackTrace to it undid the build gating on the adjacent
+        /// Debug.LogError and shipped build-machine paths and internal type names to Player.log.
+        /// </remarks>
+        private static string DescribeFailure(string context, Exception ex)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            return $"{context}: {ex}";
+#else
+            return $"{context}: {ex.Message}";
+#endif
+        }
+
+        /// <summary>
+        /// Removes the Strada player-loop systems this bootstrapper installed, if it installed any.
+        /// </summary>
+        /// <remarks>
+        /// Awake() calls PlayerLoop.Initialize() before any initialization phase runs, but the
+        /// matching Shutdown() used to sit behind the _isInitialized guard — which a failed or
+        /// interrupted bootstrap never sets. The entries then stayed in Unity's global player loop
+        /// for the rest of the process, and PlayerLoop's own _initialized flag made a later
+        /// bootstrapper's Initialize() a silent no-op over the stale loop.
+        /// </remarks>
+        private void ReleasePlayerLoop()
+        {
+            if (!_playerLoopInitialized) return;
+            _playerLoopInitialized = false;
+            PlayerLoop.Shutdown();
         }
 
         private void Shutdown()
         {
             if (!_isInitialized)
             {
+                // A bootstrapper destroyed while still initializing never runs DisposeResources,
+                // so the player loop is released here instead. Duplicate instances bail out of
+                // Awake before PlayerLoop.Initialize, so this is a no-op for them.
+                ReleasePlayerLoop();
                 return;
             }
 
@@ -379,8 +420,6 @@ namespace Strada.Core.Bootstrap
 
             DisposeResources();
             _isInitialized = false;
-
-            PlayerLoop.Shutdown();
 
             Log("=== Strada Framework Shutdown Complete ===");
         }
@@ -408,9 +447,16 @@ namespace Strada.Core.Bootstrap
             _timerService?.Dispose();
             _timerService = null;
 
+            var world = _world;
             _world?.Dispose();
             _world = null;
-            ECS.World.World.Current = null;
+
+            // Only clear the ambient World if it is still ours. World.Dispose already does exactly
+            // this check; clearing unconditionally wiped a World that another bootstrapper owns.
+            if (ReferenceEquals(ECS.World.World.Current, world))
+            {
+                ECS.World.World.Current = null;
+            }
 
             if (_container is IDisposable disposable)
             {
@@ -418,6 +464,19 @@ namespace Strada.Core.Bootstrap
             }
             _container = null;
             _serviceLocator = null;
+
+            // The container only takes ownership of these once builder.Build() returns, so when
+            // BuildContainer throws between creating them and building, nothing else ever releases
+            // the EventBus handler tables. EventBus.Dispose is idempotent, so disposing here as
+            // well on the success path (where World.Dispose already disposed it) is harmless.
+            _sharedEventBus?.Dispose();
+            _sharedEventBus = null;
+            _sharedHandleRegistry = null;
+
+            // Otherwise this retains a reference to every ModuleConfig asset after teardown.
+            _sortedModules = null;
+
+            ReleasePlayerLoop();
 
             Container = null;
             Services = null;

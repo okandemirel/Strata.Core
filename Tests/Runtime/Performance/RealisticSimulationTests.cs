@@ -62,10 +62,22 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
         [Test]
         public void Simulation_CacheThrashing()
         {
-            var randomIndices = new NativeArray<int>(EntityCount, Allocator.Temp);
+            // Persistent, not Temp: this is a 400 KB buffer held across a 100k-iteration
+            // synchronous loop, well past what Temp's small-block bump allocator is meant for.
+            // try/finally rather than a trailing Dispose(): a throw inside the loop below — a
+            // stale entity reaching GetComponentRef, say — used to skip the Dispose entirely,
+            // leaking the allocation and arming Unity's leak detector for the rest of the run.
+            // (`using var` cannot be used here: the local would be readonly and the buffer is
+            // filled after declaration.)
+            var randomIndices = new NativeArray<int>(EntityCount, Allocator.Persistent);
+            try
+            {
             var rand = new Random(12345);
             for (int i = 0; i < EntityCount; i++)
-                randomIndices[i] = rand.Next(1, EntityCount); 
+                randomIndices[i] = rand.Next(1, EntityCount);
+
+            int touched = 0;
+            float checksum = 0;
 
             var stopwatch = new Stopwatch();
             stopwatch.Start();
@@ -73,23 +85,34 @@ namespace Strada.Core.Tests.Tests.Runtime.Performance
             for (int i = 0; i < EntityCount; i++)
             {
                 int index = randomIndices[i];
-                var entity = _manager.GetEntity(index); 
+                var entity = _manager.GetEntity(index);
                 if (_manager.Exists(entity))
                 {
                     if (_manager.HasComponent<Position>(entity))
                     {
                         ref var p = ref _manager.GetComponentRef<Position>(entity);
                         p.X += 1;
+                        touched++;
+                        checksum += p.X;
                     }
                 }
             }
 
             stopwatch.Stop();
-            randomIndices.Dispose();
-            
+
             UnityEngine.Debug.Log($"Random Access ({EntityCount} ops): {stopwatch.Elapsed.TotalMilliseconds} ms");
-            
+
+            // Every index in [1, EntityCount) belongs to a live entity that Setup gave a
+            // Position, so every probe must hit. Without this the loop's writes are unobserved
+            // and a build that skipped them entirely would still report a passing benchmark.
+            Assert.AreEqual(EntityCount, touched, "Every random probe should hit a live entity with a Position");
+            Assert.Greater(checksum, 0f);
             Assert.Less(stopwatch.Elapsed.TotalMilliseconds, 500.0);
+            }
+            finally
+            {
+                randomIndices.Dispose();
+            }
         }
     }
 }

@@ -36,7 +36,18 @@ namespace Strada.Core.Sync
 
         public void Bind(IContainer container, EntityManager entityManager, Entity entity)
         {
-            if (_bound) return;
+            if (_bound)
+            {
+                // Re-binding to the same entity is a harmless no-op. Re-binding to a different
+                // one used to be silently ignored, which left the view reading the previous
+                // entity's components while ViewRegistry recorded it as representing the new
+                // one — cross-entity data corruption with no diagnostic.
+                if (_entity == entity) return;
+
+                throw new InvalidOperationException(
+                    $"{GetType().Name} is already bound to Entity({_entity.Index},{_entity.Version}); " +
+                    $"call Unbind() before binding it to Entity({entity.Index},{entity.Version}).");
+            }
 
             _container = container;
             _entityManager = entityManager;

@@ -53,8 +53,20 @@ namespace Strada.Core.Patterns
 
             OnDispose();
 
-            foreach (var disposable in _disposables)
-                disposable.Dispose();
+            // LIFO, matching Base.Dispose, and isolated per item: _disposed is already set so
+            // Dispose cannot be retried, and one throwing entry would otherwise strand every
+            // remaining reactive property and user disposable for good.
+            for (int i = _disposables.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    _disposables[i]?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogException(ex);
+                }
+            }
             _disposables.Clear();
 
             GC.SuppressFinalize(this);
@@ -111,9 +123,17 @@ namespace Strada.Core.Patterns
 
         protected IReadOnlyReactiveProperty<T> GetProperty<T>(string name)
         {
-            return _properties.TryGetValue(name, out var property)
-                ? (IReadOnlyReactiveProperty<T>)property
-                : null;
+            if (!_properties.TryGetValue(name, out var property))
+                return null;
+
+            // Mirrors Property<T>: the dictionary is keyed by name only, so a mismatched T would
+            // otherwise surface as a bare InvalidCastException naming neither the property nor
+            // the type that was actually stored.
+            if (property is IReadOnlyReactiveProperty<T> typed)
+                return typed;
+
+            throw new InvalidOperationException(
+                $"Property '{name}' type mismatch: expected {typeof(T)}, got {property.GetType()}");
         }
     }
 }
