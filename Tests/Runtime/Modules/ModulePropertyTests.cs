@@ -27,6 +27,64 @@ namespace Strada.Core.Tests.Tests.Runtime.Modules
             public void Install(IContainerBuilder builder) { }
         }
 
+        /// <summary>
+        /// ModuleRegistry deduplicates by module TYPE, so registering N instances of one type
+        /// yields one module. Tests that need N distinct modules must supply N distinct types;
+        /// this generic wrapper plus the marker structs below provide a pool of them.
+        /// </summary>
+        private class TestModule<TMarker> : IModuleInstaller
+        {
+            public void Install(IContainerBuilder builder) { }
+        }
+
+        private struct M0 { }
+        private struct M1 { }
+        private struct M2 { }
+        private struct M3 { }
+        private struct M4 { }
+        private struct M5 { }
+        private struct M6 { }
+        private struct M7 { }
+        private struct M8 { }
+        private struct M9 { }
+        private struct M10 { }
+        private struct M11 { }
+        private struct M12 { }
+        private struct M13 { }
+        private struct M14 { }
+        private struct M15 { }
+        private struct M16 { }
+        private struct M17 { }
+        private struct M18 { }
+        private struct M19 { }
+
+        private static readonly Func<IModuleInstaller>[] DistinctModules =
+        {
+            () => new TestModule<M0>(),
+            () => new TestModule<M1>(),
+            () => new TestModule<M2>(),
+            () => new TestModule<M3>(),
+            () => new TestModule<M4>(),
+            () => new TestModule<M5>(),
+            () => new TestModule<M6>(),
+            () => new TestModule<M7>(),
+            () => new TestModule<M8>(),
+            () => new TestModule<M9>(),
+            () => new TestModule<M10>(),
+            () => new TestModule<M11>(),
+            () => new TestModule<M12>(),
+            () => new TestModule<M13>(),
+            () => new TestModule<M14>(),
+            () => new TestModule<M15>(),
+            () => new TestModule<M16>(),
+            () => new TestModule<M17>(),
+            () => new TestModule<M18>(),
+            () => new TestModule<M19>(),
+        };
+
+        /// <summary>Maximum number of distinct module types the pool can supply.</summary>
+        private const int DistinctModuleCapacity = 20;
+
         private class DynamicModuleInfo
         {
             public string Name { get; set; }
@@ -183,19 +241,22 @@ namespace Strada.Core.Tests.Tests.Runtime.Modules
                     for (int i = 0; i < moduleGraph.Count; i++)
                     {
                         var graphModule = moduleGraph[i];
-                        var installer = new TestModuleBase();
+                        // Distinct type per module: ModuleRegistry deduplicates by type, so
+                        // reusing one type collapsed the whole graph to a single module and
+                        // made the count assertion below unsatisfiable.
+                        var installer = DistinctModules[i]();
 
                         var moduleInfo = new ModuleInfo
                         {
                             Installer = installer,
-                            Type = typeof(TestModuleBase),
+                            Type = installer.GetType(),
                             Name = graphModule.Name,
                             Priority = 0,
                             Dependencies = new List<Type>()
                         };
 
                         moduleInfos.Add(moduleInfo);
-                        typeMap[graphModule.Name] = typeof(TestModuleBase);
+                        typeMap[graphModule.Name] = installer.GetType();
                         installers[graphModule.Name] = installer;
                     }
 
@@ -231,7 +292,7 @@ namespace Strada.Core.Tests.Tests.Runtime.Modules
                     var modules = new List<IModuleInstaller>();
                     for (int i = 0; i < chainLength; i++)
                     {
-                        modules.Add(new TestModuleBase());
+                        modules.Add(DistinctModules[i]());
                     }
 
                     for (int i = chainLength - 1; i >= 0; i--)
@@ -266,7 +327,7 @@ namespace Strada.Core.Tests.Tests.Runtime.Modules
 
                     for (int i = 0; i < moduleCount; i++)
                     {
-                        var installer = new TestModuleBase();
+                        var installer = DistinctModules[i]();
                         installers.Add(installer);
                         registry.RegisterModule(installer, priority: i);
                     }
@@ -327,7 +388,7 @@ namespace Strada.Core.Tests.Tests.Runtime.Modules
 
                     for (int i = 0; i < moduleCount; i++)
                     {
-                        registry.RegisterModule(new TestModuleBase(), priority: i);
+                        registry.RegisterModule(DistinctModules[i](), priority: i);
                     }
 
                     var isValid = registry.Validate(out var errorMessage);

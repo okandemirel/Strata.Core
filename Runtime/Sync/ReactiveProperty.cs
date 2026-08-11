@@ -135,30 +135,6 @@ namespace Strada.Core.Sync
             _handlers = Array.Empty<Action<T>>();
         }
 
-        private static THandler[] AppendHandler<THandler>(THandler[] current, THandler handler)
-            where THandler : class
-        {
-            if (handler == null) throw new ArgumentNullException(nameof(handler));
-            var grown = new THandler[current.Length + 1];
-            Array.Copy(current, grown, current.Length);
-            grown[current.Length] = handler;
-            return grown;
-        }
-
-        private static THandler[] RemoveHandler<THandler>(THandler[] current, THandler handler)
-            where THandler : class
-        {
-            for (int i = current.Length - 1; i >= 0; i--)
-            {
-                if (!ReferenceEquals(current[i], handler)) continue;
-                if (current.Length == 1) return Array.Empty<THandler>();
-                var shrunk = new THandler[current.Length - 1];
-                Array.Copy(current, 0, shrunk, 0, i);
-                Array.Copy(current, i + 1, shrunk, i, current.Length - i - 1);
-                return shrunk;
-            }
-            return current;
-        }
 
         public void Dispose()
         {
@@ -242,6 +218,31 @@ namespace Strada.Core.Sync
             var snapshot = _clearHandlers;
             for (int i = 0; i < snapshot.Length; i++)
                 snapshot[i]();
+        }
+
+        private static THandler[] AppendHandler<THandler>(THandler[] current, THandler handler)
+            where THandler : class
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            var grown = new THandler[current.Length + 1];
+            Array.Copy(current, grown, current.Length);
+            grown[current.Length] = handler;
+            return grown;
+        }
+
+        private static THandler[] RemoveHandler<THandler>(THandler[] current, THandler handler)
+            where THandler : class
+        {
+            for (int i = current.Length - 1; i >= 0; i--)
+            {
+                if (!ReferenceEquals(current[i], handler)) continue;
+                if (current.Length == 1) return Array.Empty<THandler>();
+                var shrunk = new THandler[current.Length - 1];
+                Array.Copy(current, 0, shrunk, 0, i);
+                Array.Copy(current, i + 1, shrunk, i, current.Length - i - 1);
+                return shrunk;
+            }
+            return current;
         }
 
         public void Dispose()

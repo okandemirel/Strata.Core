@@ -136,6 +136,10 @@ namespace Strada.Core.Modules
                 .Where(t => installerType.IsAssignableFrom(t) &&
                            t.IsClass &&
                            !t.IsAbstract &&
+                           // An open generic (MyModule<T>) has a parameterless constructor but
+                           // cannot be instantiated; without this it reached Activator and
+                           // logged an error for every generic module installer in the project.
+                           !t.ContainsGenericParameters &&
                            t.GetConstructor(Type.EmptyTypes) != null);
 
             foreach (var type in types)
