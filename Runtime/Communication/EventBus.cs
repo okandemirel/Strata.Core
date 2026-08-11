@@ -432,18 +432,49 @@ namespace Strada.Core.Communication
         private void ThrowDisposed() =>
             throw new ObjectDisposedException(nameof(EventBus));
 
+        /// <summary>
+        /// A snapshot of the subscriber list: the array plus the number of entries in it that
+        /// are live. Publishing reads one reference and iterates <see cref="Count"/>.
+        /// </summary>
+        /// <remarks>
+        /// Splitting the count from the array length is what makes amortised growth safe.
+        /// Subscribing writes the new handler into spare capacity at index Count and only
+        /// then publishes a snapshot with Count+1, so a publisher still holding the previous
+        /// snapshot iterates the old Count and never observes the slot being written. Growth
+        /// therefore copies only when capacity runs out — building N subscribers is amortised
+        /// O(N) instead of the O(N^2) that a copy-per-subscribe produced.
+        /// </remarks>
+        private sealed class HandlerSnapshot<T>
+        {
+            public static readonly HandlerSnapshot<T> Empty = new(Array.Empty<Action<T>>(), 0);
+
+            public readonly Action<T>[] Handlers;
+            public readonly int Count;
+
+            public HandlerSnapshot(Action<T>[] handlers, int count)
+            {
+                Handlers = handlers;
+                Count = count;
+            }
+        }
+
         private sealed class EventChannel<T>
         {
-            private Action<T>[] _handlers = Array.Empty<Action<T>>();
+            private HandlerSnapshot<T> _snapshot = HandlerSnapshot<T>.Empty;
             private readonly object _lock = new object();
 
-            public int Count => Volatile.Read(ref _handlers).Length;
+            public int Count => Volatile.Read(ref _snapshot).Count;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void Publish(ref T message)
             {
-                var handlers = Volatile.Read(ref _handlers);
-                for (int i = 0; i < handlers.Length; i++)
+                // One volatile read yields a consistent (array, count) pair; the snapshot is
+                // never mutated below its own Count once published, so no lock is needed.
+                var snapshot = Volatile.Read(ref _snapshot);
+                var handlers = snapshot.Handlers;
+                int count = snapshot.Count;
+
+                for (int i = 0; i < count; i++)
                 {
                     try
                     {
@@ -460,11 +491,22 @@ namespace Strada.Core.Communication
             {
                 lock (_lock)
                 {
-                    var oldHandlers = _handlers;
-                    var newHandlers = new Action<T>[oldHandlers.Length + 1];
-                    Array.Copy(oldHandlers, newHandlers, oldHandlers.Length);
-                    newHandlers[oldHandlers.Length] = handler;
-                    Volatile.Write(ref _handlers, newHandlers);
+                    var current = _snapshot;
+                    var handlers = current.Handlers;
+                    int count = current.Count;
+
+                    if (count == handlers.Length)
+                    {
+                        // Out of capacity: grow geometrically rather than by one.
+                        var grown = new Action<T>[count == 0 ? 4 : count * 2];
+                        Array.Copy(handlers, grown, count);
+                        handlers = grown;
+                    }
+
+                    // Written before the new snapshot is published, and beyond the Count that
+                    // any concurrent publisher can currently see.
+                    handlers[count] = handler;
+                    Volatile.Write(ref _snapshot, new HandlerSnapshot<T>(handlers, count + 1));
                 }
             }
 
@@ -472,18 +514,22 @@ namespace Strada.Core.Communication
             {
                 lock (_lock)
                 {
-                    var oldHandlers = _handlers;
-                    var index = Array.IndexOf(oldHandlers, handler);
+                    var current = _snapshot;
+                    var handlers = current.Handlers;
+                    int count = current.Count;
+
+                    int index = Array.IndexOf(handlers, handler, 0, count);
                     if (index < 0) return;
 
-                    var newHandlers = new Action<T>[oldHandlers.Length - 1];
+                    // Removal must copy: shifting in place would be visible to a publisher
+                    // already iterating the current snapshot.
+                    var reduced = new Action<T>[count - 1];
                     if (index > 0)
-                        Array.Copy(oldHandlers, 0, newHandlers, 0, index);
+                        Array.Copy(handlers, 0, reduced, 0, index);
+                    if (index < count - 1)
+                        Array.Copy(handlers, index + 1, reduced, index, count - index - 1);
 
-                    if (index < oldHandlers.Length - 1)
-                        Array.Copy(oldHandlers, index + 1, newHandlers, index, oldHandlers.Length - index - 1);
-
-                    Volatile.Write(ref _handlers, newHandlers);
+                    Volatile.Write(ref _snapshot, new HandlerSnapshot<T>(reduced, count - 1));
                 }
             }
         }

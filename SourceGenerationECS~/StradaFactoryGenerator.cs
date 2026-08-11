@@ -12,15 +12,15 @@ namespace Strada.SourceGeneration
     [Generator]
     public sealed class StradaFactoryGenerator : IIncrementalGenerator
     {
-        private const string StradaServiceAttribute = "Strada.Core.DI.Attributes.StradaServiceAttribute";
         private const string AutoRegisterAttribute = "Strada.Core.DI.Attributes.AutoRegisterAttribute";
         private const string AutoRegisterSingletonAttribute = "Strada.Core.DI.Attributes.AutoRegisterSingletonAttribute";
         private const string AutoRegisterTransientAttribute = "Strada.Core.DI.Attributes.AutoRegisterTransientAttribute";
         private const string AutoRegisterScopedAttribute = "Strada.Core.DI.Attributes.AutoRegisterScopedAttribute";
 
+        // StradaServiceAttribute used to be listed here too, but no such type exists in the
+        // package (in this or any other namespace), so it could never match.
         private static readonly HashSet<string> SupportedAttributes = new()
         {
-            StradaServiceAttribute,
             AutoRegisterAttribute,
             AutoRegisterSingletonAttribute,
             AutoRegisterTransientAttribute,
