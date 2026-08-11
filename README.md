@@ -547,10 +547,17 @@ brew install --cask unity-cli     # optional; see docs.unity.com/en-us/unity-cli
 unity install 6000.5.7f1          # the version this package targets
 ```
 
-The compile and test invocations still drive the editor executable in batchmode rather than
-`unity test`. The CLI has a test subcommand, but it is marked experimental and its flags are
-not in the published reference — Unity's own docs name `unity --help` as the authority. The
-switch is a small, isolated change in `run-tests.sh`, noted inline there.
+`run-tests.sh` uses `unity test` when the CLI is present and drives the editor in batchmode
+when it is not. Both write the same NUnit XML, so the output is identical either way; both
+paths are exercised. The CLI path additionally passes `--allow-install`, which provisions the
+editor named in the project's `ProjectVersion.txt` — that is what lets a clean CI runner work
+with no separate install step. Extra arguments are forwarded to the editor:
+
+```bash
+./Tools/ci/run-tests.sh /tmp/StradaBench playmode -testCategory "Performance"
+```
+
+Note that Unity marks the CLI experimental; the batchmode fallback is kept for that reason.
 
 ```bash
 # Build the host project once, then compile and run the suite

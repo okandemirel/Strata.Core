@@ -24,13 +24,13 @@ if [ -n "$UNITY_CLI" ]; then
         warn "no UNITY_SERVICE_ACCOUNT_ID / UNITY_SERVICE_ACCOUNT_SECRET (needed for unattended CI)"
     fi
     if "$UNITY_CLI" test --help >/dev/null 2>&1; then
-        ok "'unity test' is available — see the note in run-tests.sh about switching to it"
+        ok "'unity test' available — run-tests.sh will use it"
     else
-        warn "'unity test' not available in this CLI version"
+        warn "'unity test' missing from this CLI version; run-tests.sh falls back to batchmode"
     fi
 else
-    warn "not installed. Provisioning and CI auth still work without it, via the Hub and an"
-    warn "explicit UNITY path, but 'unity install' and service-account auth need it:"
+    warn "not installed — run-tests.sh falls back to driving the editor in batchmode, which"
+    warn "works, but editor provisioning and service-account auth need the CLI:"
     warn "    brew install --cask unity-cli"
 fi
 echo

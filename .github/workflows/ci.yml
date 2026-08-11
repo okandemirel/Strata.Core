@@ -8,9 +8,10 @@
 #
 # This uses Unity's own CLI (shipped July 2026) rather than GameCI. That removes the
 # license-file activation dance and the dependency on GameCI publishing a Docker image
-# for the editor version we target — `unity install` provisions the exact version we ask
-# for. The CLI is marked EXPERIMENTAL by Unity, which is one more reason the triggers
-# below stay commented until someone has watched a run end to end.
+# for the editor version we target: `unity test --allow-install` provisions the exact
+# version named in the project's ProjectVersion.txt. The CLI is still marked EXPERIMENTAL
+# by Unity, which is why the triggers below stay commented until someone has watched a
+# dispatch run end to end.
 #
 # Design notes:
 #   - The repository is a Unity *package*: no Assets/, no ProjectSettings/. Nothing can
@@ -93,12 +94,6 @@ jobs:
 
       - name: Install the Unity CLI
         run: curl -fsSL https://public-cdn.cloud.unity3d.com/hub/prod/cli/install.sh | bash
-
-      - name: Provision the editor
-        env:
-          UNITY_SERVICE_ACCOUNT_ID: ${{ secrets.UNITY_SERVICE_ACCOUNT_ID }}
-          UNITY_SERVICE_ACCOUNT_SECRET: ${{ secrets.UNITY_SERVICE_ACCOUNT_SECRET }}
-        run: unity install "$STRADA_UNITY_VERSION" --non-interactive
 
       - name: Toolchain report
         run: ./Tools/ci/doctor.sh
