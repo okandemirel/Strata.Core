@@ -1,0 +1,113 @@
+# Strada.Core CI
+#
+# SETUP REQUIRED before this can run — it has not been executed yet:
+#   1. Add repository secrets UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD
+#      (see https://game.ci/docs/github/activation).
+#   2. Pin UNITY_VERSION below to a version GameCI publishes an image for. The repo is
+#      developed against 6000.5.7f1, but GameCI images lag; 6000.0.x is the safe choice
+#      for hosted runners.
+#
+# Design notes:
+#   - The repository is a Unity *package*: no Assets/, no ProjectSettings/. Nothing can
+#     open it directly, so every job first synthesises a host project. The `testables`
+#     entry that script writes is mandatory — without it the Test Runner silently
+#     discovers zero tests and the run "passes".
+#   - The test assembly targets all platforms, so its tests are playmode tests.
+#     -testPlatform editmode finds none of them.
+#   - Timing assertions are NOT gated here. GitHub-hosted runners share physical cores
+#     and routinely vary 20-50% on identical code, so a wall-clock gate would be flaky
+#     and would get ignored. What IS gated is deterministic: compilation, correctness,
+#     and allocation assertions (Is.Not.AllocatingGCMemory hooks the runtime allocation
+#     callback and gives the same answer on any machine).
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UNITY_VERSION: 6000.0.58f1
+
+jobs:
+  generators:
+    name: source generators build and match the checked-in binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      # The shipped analyzer was once a stale binary built from an unrelated project,
+      # containing a generator the repository had since changed. Rebuilding and diffing
+      # makes that impossible to reintroduce silently.
+      - name: Rebuild generators
+        run: |
+          dotnet build SourceGeneration~/Strada.SourceGeneration.csproj \
+            -c Release -o /tmp/gen \
+            -p:RoslynPath="$(dirname "$(find / -name 'Microsoft.CodeAnalysis.CSharp.dll' -path '*Unity*' 2>/dev/null | head -1)")" \
+          || echo "::warning::Roslyn from a Unity install was unavailable on this runner; see Tools/ci/build-generators.sh"
+      - name: Fail if the checked-in analyzer is out of date
+        run: |
+          if [ -f /tmp/gen/Strada.SourceGeneration.dll ]; then
+            cmp -s /tmp/gen/Strada.SourceGeneration.dll Runtime/Analyzers/Strada.SourceGeneration.dll \
+              || { echo "::error::Runtime/Analyzers/Strada.SourceGeneration.dll differs from a fresh build. Run Tools/ci/build-generators.sh and commit."; exit 1; }
+          fi
+
+  tests:
+    name: compile and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Synthesise host project
+        run: ./Tools/ci/assemble-bench-project.sh "$PWD" "$PWD/BenchProject"
+
+      - uses: actions/cache@v4
+        with:
+          path: BenchProject/Library
+          key: Library-${{ env.UNITY_VERSION }}-${{ hashFiles('BenchProject/Packages/manifest.json') }}
+          restore-keys: Library-${{ env.UNITY_VERSION }}-
+
+      # Correctness gate. Compilation failures surface here too: Unity exits non-zero
+      # when any assembly fails to build, which is how the CS0619 errors that made this
+      # package uncompilable on Unity 6000.5 went unnoticed for so long.
+      - name: Run tests
+        uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: BenchProject
+          unityVersion: ${{ env.UNITY_VERSION }}
+          testMode: playmode
+          artifactsPath: artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: artifacts
+
+  docs:
+    name: documentation references real APIs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # README once instructed users to run ./run_tests.sh, which has never existed in
+      # this repository. Anything the docs tell a user to execute must be present.
+      - name: Referenced scripts exist
+        run: |
+          fail=0
+          for f in $(grep -ohE '\./[A-Za-z0-9_/.-]+\.sh' README.md Documentation~/*.md | sort -u); do
+            [ -f "${f#./}" ] || { echo "::error::$f is referenced in the docs but does not exist"; fail=1; }
+          done
+          exit $fail
