@@ -61,10 +61,32 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
                     includePlatforms: new[] { "Editor" }, autoReferenced: true, overrideReferences: false);
             }
 
-            if (context.Definition.Components.RuntimeTests || context.Definition.Components.EditorTests)
+            // One assembly per test mode, matching the folders DirectoryStructureConfig
+            // declares (Tests/Runtime -> RuntimeTests, Tests/Editor -> EditorTests).
+            //
+            // Both modes previously shared a single Tests/{name}.Tests.asmdef pinned to
+            // includePlatforms: ["Editor"]. Checking "Runtime Tests" therefore produced a
+            // Tests/Runtime folder whose code compiled into an editor-only assembly, so
+            // play-mode tests could never run on a device — which is the one thing a
+            // runtime test exists to do. The editor-only constraint belongs on the editor
+            // assembly alone.
+            if (context.Definition.Components.RuntimeTests)
             {
-                WriteAsmdef($"{basePath}/Tests/{name}.Tests.asmdef",
+                WriteAsmdef($"{basePath}/Tests/Runtime/{name}.Tests.asmdef",
                     $"{ns}.Tests", $"{ns}.Tests",
+                    new List<string> { ns, "Strada.Core", "UnityEngine.TestRunner", "UnityEditor.TestRunner" }, context,
+                    autoReferenced: false, overrideReferences: true,
+                    precompiledReferences: new[] { "nunit.framework.dll" },
+                    defineConstraints: new[] { "UNITY_INCLUDE_TESTS" });
+            }
+
+            if (context.Definition.Components.EditorTests)
+            {
+                // Unique assembly name, but the rootNamespace stays {ns}.Tests because
+                // that is the namespace GenerateEditorTests actually emits; a rootNamespace
+                // that disagrees with the code only misleads whoever adds the next file.
+                WriteAsmdef($"{basePath}/Tests/Editor/{name}.Editor.Tests.asmdef",
+                    $"{ns}.Editor.Tests", $"{ns}.Tests",
                     new List<string> { ns, "Strada.Core", "UnityEngine.TestRunner", "UnityEditor.TestRunner" }, context,
                     includePlatforms: new[] { "Editor" }, autoReferenced: false, overrideReferences: true,
                     precompiledReferences: new[] { "nunit.framework.dll" },

@@ -714,13 +714,14 @@ namespace Strada.Core.Editor.ModuleGenerator
                 {
                     sb.AppendLine("      📁 Runtime/");
                     sb.AppendLine($"         📄 {name}Tests.cs");
+                    sb.AppendLine($"         📄 {name}.Tests.asmdef");
                 }
                 if (components.EditorTests)
                 {
                     sb.AppendLine("      📁 Editor/");
                     sb.AppendLine($"         📄 {name}EditorTests.cs");
+                    sb.AppendLine($"         📄 {name}.Editor.Tests.asmdef");
                 }
-                sb.AppendLine($"      📄 {name}.Tests.asmdef");
             }
 
             var hasOptionalFolders = components.FolderResources || components.FolderPrefabs ||
