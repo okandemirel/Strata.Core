@@ -14,25 +14,20 @@ namespace Strada.Core.Editor.ModuleGenerator.Config
     {
         private const string ConfigPath = "Assets/Editor/StradaDirectoryConfig.asset";
 
-        // Component folders sit directly under the module root. There is no
-        // Scripts/ layer: it grouped every code folder behind one name that says
-        // nothing about the module, while Editor/, Tests/ and Resources/ already
-        // lived at the root — so the tree was split by "is it code" rather than
-        // by concern, and reading a module meant opening Scripts/ first.
         [SerializeField] private List<FolderEntry> _folders = new List<FolderEntry>
         {
-            new FolderEntry { Path = "Interfaces", RequiredComponent = ComponentType.ServiceInterface },
-            new FolderEntry { Path = "Services", RequiredComponent = ComponentType.Service },
-            new FolderEntry { Path = "Controllers", RequiredComponent = ComponentType.Controller },
-            new FolderEntry { Path = "Commands", RequiredComponent = ComponentType.Commands },
-            new FolderEntry { Path = "Models", RequiredComponent = ComponentType.Model },
-            new FolderEntry { Path = "Views", RequiredComponent = ComponentType.View },
-            new FolderEntry { Path = "Systems", RequiredComponent = ComponentType.EcsSystem },
-            new FolderEntry { Path = "Components", RequiredComponent = ComponentType.EcsComponent },
-            new FolderEntry { Path = "Events", RequiredComponent = ComponentType.Events },
-            new FolderEntry { Path = "Signals", RequiredComponent = ComponentType.Signals },
-            new FolderEntry { Path = "Data/UnityObjects", RequiredComponent = ComponentType.ConfigData },
-            new FolderEntry { Path = "Data/ValueObjects", RequiredComponent = ComponentType.ValueObject },
+            new FolderEntry { Path = "Scripts", IsMandatory = true },
+            new FolderEntry { Path = "Scripts/Interfaces", RequiredComponent = ComponentType.ServiceInterface },
+            new FolderEntry { Path = "Scripts/Services", RequiredComponent = ComponentType.Service },
+            new FolderEntry { Path = "Scripts/Controllers", RequiredComponent = ComponentType.Controller },
+            new FolderEntry { Path = "Scripts/Models", RequiredComponent = ComponentType.Model },
+            new FolderEntry { Path = "Scripts/Views", RequiredComponent = ComponentType.View },
+            new FolderEntry { Path = "Scripts/Systems", RequiredComponent = ComponentType.EcsSystem },
+            new FolderEntry { Path = "Scripts/Components", RequiredComponent = ComponentType.EcsComponent },
+            new FolderEntry { Path = "Scripts/Events", RequiredComponent = ComponentType.Events },
+            new FolderEntry { Path = "Scripts/Signals", RequiredComponent = ComponentType.Signals },
+            new FolderEntry { Path = "Scripts/Data/UnityObjects", RequiredComponent = ComponentType.ConfigData },
+            new FolderEntry { Path = "Scripts/Data/ValueObjects", RequiredComponent = ComponentType.ValueObject },
             new FolderEntry { Path = "Editor", RequiredComponent = ComponentType.EditorScripts },
             new FolderEntry { Path = "Resources/Configs", IsOptional = true },
             new FolderEntry { Path = "Resources/Prefabs", IsOptional = true },
@@ -105,7 +100,6 @@ namespace Strada.Core.Editor.ModuleGenerator.Config
                 ComponentType.ServiceInterface => components.ServiceInterface,
                 ComponentType.Service => components.Service,
                 ComponentType.Controller => components.Controller,
-                ComponentType.Commands => components.Commands,
                 ComponentType.Model => components.Model,
                 ComponentType.View => components.View,
                 ComponentType.EcsSystem => components.EcsSystem,
@@ -140,7 +134,6 @@ namespace Strada.Core.Editor.ModuleGenerator.Config
         ServiceInterface,
         Service,
         Controller,
-        Commands,
         Model,
         View,
         EcsSystem,

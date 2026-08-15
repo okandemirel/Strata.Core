@@ -70,6 +70,7 @@ namespace Strada.Core.Editor.Templates
             { "Config", new[] { TemplateType.Config } },
             { "Configs", new[] { TemplateType.Config } },
             { "Configuration", new[] { TemplateType.Config } },
+            { "Scripts", new[] { TemplateType.Controller, TemplateType.Service, TemplateType.System } },
             { "ECS", new[] { TemplateType.System, TemplateType.Component } },
             { "MVCS", new[] { TemplateType.Controller, TemplateType.Service, TemplateType.View, TemplateType.Model } },
         };

@@ -121,17 +121,20 @@ namespace Strada.Core.Editor
                 var filePath = Path.Combine(folderPath, file);
                 if (!File.Exists(filePath))
                 {
-                    issues.Add($"Missing: {file}");
+                    var scriptsPath = Path.Combine(folderPath, "Scripts", file);
+                    if (!File.Exists(scriptsPath))
+                    {
+                        issues.Add($"Missing: {file}");
+                    }
                 }
             }
 
-            // Directly under the module root: there is no Scripts/ layer.
             var recommendedFolders = new[]
             {
-                "Controllers",
-                "Services",
-                "Systems",
-                "Components"
+                "Scripts/Controllers",
+                "Scripts/Services",
+                "Scripts/Systems",
+                "Scripts/Components"
             };
 
             foreach (var folder in recommendedFolders)
@@ -169,9 +172,8 @@ namespace Strada.Core.Editor
             if (string.IsNullOrEmpty(folderPath)) return false;
 
             var folderName = Path.GetFileName(folderPath);
-            return folderName.EndsWith("Module") ||
-                   Directory.Exists(Path.Combine(folderPath, "Services")) ||
-                   Directory.Exists(Path.Combine(folderPath, "Systems"));
+            return folderName.EndsWith("Module") || 
+                   Directory.Exists(Path.Combine(folderPath, "Scripts"));
         }
 
         /// <summary>

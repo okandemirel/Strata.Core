@@ -11,14 +11,6 @@ namespace Strada.Core.Editor.ModuleGenerator
 {
     public static class ModuleDiscovery
     {
-        /// <summary>Folders inside a module that are never themselves modules.</summary>
-        private static readonly HashSet<string> NonModuleFolders = new HashSet<string>
-        {
-            "Editor", "Tests", "Resources", "Prefabs", "Scenes",
-            "Interfaces", "Services", "Controllers", "Commands", "Models", "Views",
-            "Systems", "Components", "Events", "Signals", "Data",
-        };
-
         private static readonly string[] ScreenPatterns = { "Screen", "View", "UI", "Panel", "Dialog", "Popup" };
         private static readonly string[] TestPatterns = { "Test", "Tests", "Spec" };
 
@@ -82,10 +74,8 @@ namespace Strada.Core.Editor.ModuleGenerator
             {
                 var folderName = Path.GetFileName(dir);
 
-                // Component folders sit directly under a module root now that the
-                // Scripts/ layer is gone, so each of them has to be skipped here
-                // rather than the single wrapper that used to hide them all.
-                if (folderName.StartsWith(".") || NonModuleFolders.Contains(folderName))
+                if (folderName.StartsWith(".") || folderName == "Editor" || folderName == "Tests" ||
+                    folderName == "Scripts" || folderName == "Resources" || folderName == "Prefabs")
                     continue;
 
                 if (IsModuleFolder(folderName))

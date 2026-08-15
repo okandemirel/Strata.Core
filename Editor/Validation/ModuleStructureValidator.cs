@@ -109,36 +109,45 @@ namespace Strada.Core.Editor.Validation
                     .WithFile(modulePath));
             }
 
-            // Component folders live directly under the module root — there is
-            // no Scripts/ layer to require or to look inside.
+            var scriptsPath = Path.Combine(modulePath, "Scripts");
+            if (!Directory.Exists(scriptsPath))
+            {
+                issues.Add(new ValidationIssue(
+                    ValidationSeverity.Error,
+                    $"Module '{moduleName}' is missing required 'Scripts' folder",
+                    "Create a 'Scripts' folder inside the module directory")
+                    .WithFile(modulePath));
+                return issues;
+            }
+
             foreach (var required in RequiredFolders)
             {
-                var folderPath = Path.Combine(modulePath, required);
+                var folderPath = Path.Combine(scriptsPath, required);
                 if (!Directory.Exists(folderPath))
                 {
                     issues.Add(new ValidationIssue(
                         ValidationSeverity.Error,
-                        $"Module '{moduleName}' is missing required folder: {required}",
-                        $"Create folder: {folderPath}")
-                        .WithFile(modulePath));
+                        $"Module '{moduleName}' is missing required folder: Scripts/{required}",
+                        $"Create folder: {Path.Combine(scriptsPath, required)}")
+                        .WithFile(scriptsPath));
                 }
             }
 
-            var assemblyDefPath = Path.Combine(modulePath, $"{baseName}.asmdef");
+            var assemblyDefPath = Path.Combine(scriptsPath, $"{baseName}.asmdef");
             if (!File.Exists(assemblyDefPath))
             {
-                var altPath = Path.Combine(modulePath, $"{moduleName}.asmdef");
+                var altPath = Path.Combine(scriptsPath, $"{moduleName}.asmdef");
                 if (!File.Exists(altPath))
                 {
                     issues.Add(new ValidationIssue(
                         ValidationSeverity.Warning,
                         $"Module '{moduleName}' is missing assembly definition file",
                         $"Create an assembly definition file at: {assemblyDefPath}")
-                        .WithFile(modulePath));
+                        .WithFile(scriptsPath));
                 }
             }
 
-            issues.AddRange(ValidateFileNaming(modulePath, moduleName));
+            issues.AddRange(ValidateFileNaming(scriptsPath, moduleName));
 
             return issues;
         }
@@ -146,10 +155,10 @@ namespace Strada.Core.Editor.Validation
         /// <summary>
         /// Validates file naming conventions within a module.
         /// </summary>
-        private static IEnumerable<ValidationIssue> ValidateFileNaming(string modulePath, string moduleName)
+        private static IEnumerable<ValidationIssue> ValidateFileNaming(string scriptsPath, string moduleName)
         {
             var issues = new List<ValidationIssue>();
-            var csFiles = Directory.GetFiles(modulePath, "*.cs", SearchOption.AllDirectories);
+            var csFiles = Directory.GetFiles(scriptsPath, "*.cs", SearchOption.AllDirectories);
             var modulePrefix = moduleName.Replace("Module", "");
 
             foreach (var file in csFiles)

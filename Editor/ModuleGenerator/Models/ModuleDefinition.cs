@@ -88,7 +88,6 @@ namespace Strada.Core.Editor.ModuleGenerator.Models
         public bool ServiceInterface = true;
         public bool Service = true;
         public bool Controller = true;
-        public bool Commands = false;
         public bool Model = false;
         public bool View = false;
 
