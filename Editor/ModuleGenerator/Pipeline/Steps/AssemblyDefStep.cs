@@ -55,7 +55,7 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
 
             if (context.Definition.Components.EditorScripts)
             {
-                WriteAsmdef($"{basePath}/Editor/{name}.Editor.asmdef",
+                WriteAsmdef($"{basePath}/Scripts/Editor/{name}.Editor.asmdef",
                     $"{ns}.Editor", $"{ns}.Editor",
                     new List<string> { ns, "Strada.Core", "Strada.Core.Editor" }, context,
                     includePlatforms: new[] { "Editor" }, autoReferenced: true, overrideReferences: false);

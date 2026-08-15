@@ -14,8 +14,13 @@ namespace Strada.Core.Editor.ModuleGenerator.Config
     {
         private const string ConfigPath = "Assets/Editor/StradaDirectoryConfig.asset";
 
+        // Two halves, and the line between them is what a module is made of:
+        // code lives under Scripts/ — Editor/ included, since edit-mode code is
+        // still code — and authored assets live at the module root, where an
+        // artist or designer can find them without walking through Scripts/.
         [SerializeField] private List<FolderEntry> _folders = new List<FolderEntry>
         {
+            // Code
             new FolderEntry { Path = "Scripts", IsMandatory = true },
             new FolderEntry { Path = "Scripts/Interfaces", RequiredComponent = ComponentType.ServiceInterface },
             new FolderEntry { Path = "Scripts/Services", RequiredComponent = ComponentType.Service },
@@ -29,11 +34,25 @@ namespace Strada.Core.Editor.ModuleGenerator.Config
             new FolderEntry { Path = "Scripts/Signals", RequiredComponent = ComponentType.Signals },
             new FolderEntry { Path = "Scripts/Data/UnityObjects", RequiredComponent = ComponentType.ConfigData },
             new FolderEntry { Path = "Scripts/Data/ValueObjects", RequiredComponent = ComponentType.ValueObject },
-            new FolderEntry { Path = "Editor", RequiredComponent = ComponentType.EditorScripts },
-            new FolderEntry { Path = "Resources/Configs", IsOptional = true },
-            new FolderEntry { Path = "Resources/Prefabs", IsOptional = true },
+            new FolderEntry { Path = "Scripts/Editor", RequiredComponent = ComponentType.EditorScripts },
+
+            // Tests: their own assemblies, so they sit beside Scripts/, not in it
             new FolderEntry { Path = "Tests/Runtime", RequiredComponent = ComponentType.RuntimeTests },
             new FolderEntry { Path = "Tests/Editor", RequiredComponent = ComponentType.EditorTests },
+
+            // Authored assets, at the module root — an artist or designer finds
+            // them without walking through Scripts/. Optional, like the folders
+            // they replace: which of them a module gets is the author's call.
+            new FolderEntry { Path = "Art/Models", IsOptional = true },
+            new FolderEntry { Path = "Art/Textures", IsOptional = true },
+            new FolderEntry { Path = "Art/Materials", IsOptional = true },
+            new FolderEntry { Path = "Art/Prefabs", IsOptional = true },
+            new FolderEntry { Path = "Prefabs", IsOptional = true },
+            new FolderEntry { Path = "Resources", IsOptional = true },
+            new FolderEntry { Path = "Scriptables", IsOptional = true },
+            new FolderEntry { Path = "Settings", IsOptional = true },
+            new FolderEntry { Path = "Sprites", IsOptional = true },
+            new FolderEntry { Path = "Audio", IsOptional = true },
             new FolderEntry { Path = "Scenes", IsOptional = true },
         };
 
