@@ -63,55 +63,55 @@ namespace Strada.Core.Editor.ModuleGenerator.Pipeline.Steps
             {
                 new FileEntry(
                     components.ModuleConfig && moduleType == ModuleType.Main,
-                    $"{basePath}/Scripts/{name}ModuleConfig.cs",
+                    $"{basePath}/{name}ModuleConfig.cs",
                     () => GenerateModuleConfig(name, ns)),
                 new FileEntry(
                     components.ServiceInterface,
-                    $"{basePath}/Scripts/Interfaces/I{name}Service.cs",
+                    $"{basePath}/Interfaces/I{name}Service.cs",
                     () => GenerateServiceInterface(name, ns)),
                 new FileEntry(
                     components.Service,
-                    $"{basePath}/Scripts/Services/{name}Service.cs",
+                    $"{basePath}/Services/{name}Service.cs",
                     () => GenerateService(name, ns, components.ServiceInterface)),
                 new FileEntry(
                     components.Controller,
-                    $"{basePath}/Scripts/Controllers/{name}Controller.cs",
+                    $"{basePath}/Controllers/{name}Controller.cs",
                     () => GenerateController(name, ns, components.ServiceInterface)),
                 new FileEntry(
                     components.Model,
-                    $"{basePath}/Scripts/Models/{name}Model.cs",
+                    $"{basePath}/Models/{name}Model.cs",
                     () => GenerateModel(name, ns)),
                 new FileEntry(
                     components.View,
-                    $"{basePath}/Scripts/Views/{name}View.cs",
+                    $"{basePath}/Views/{name}View.cs",
                     () => GenerateView(name, ns)),
                 new FileEntry(
                     components.EcsSystem,
-                    $"{basePath}/Scripts/Systems/{name}System.cs",
+                    $"{basePath}/Systems/{name}System.cs",
                     () => GenerateSystem(name, ns)),
                 new FileEntry(
                     components.EcsComponent,
-                    $"{basePath}/Scripts/Components/{name}Component.cs",
+                    $"{basePath}/Components/{name}Component.cs",
                     () => GenerateComponent(name, ns)),
                 new FileEntry(
                     components.EntityMediator,
-                    $"{basePath}/Scripts/Views/{name}Mediator.cs",
+                    $"{basePath}/Views/{name}Mediator.cs",
                     () => GenerateMediator(name, ns)),
                 new FileEntry(
                     components.ConfigData,
-                    $"{basePath}/Scripts/Data/UnityObjects/CD_{name}.cs",
+                    $"{basePath}/Data/UnityObjects/CD_{name}.cs",
                     () => GenerateConfigData(name, ns)),
                 new FileEntry(
                     components.ValueObject,
-                    $"{basePath}/Scripts/Data/ValueObjects/{name}Config.cs",
+                    $"{basePath}/Data/ValueObjects/{name}Config.cs",
                     () => GenerateValueObject(name, ns)),
                 new FileEntry(
                     components.Events,
-                    $"{basePath}/Scripts/Events/{name}Events.cs",
+                    $"{basePath}/Events/{name}Events.cs",
                     () => GenerateEvents(name, ns)),
                 new FileEntry(
                     components.Signals,
-                    $"{basePath}/Scripts/Events/{name}Signals.cs",
+                    $"{basePath}/Events/{name}Signals.cs",
                     () => GenerateSignals(name, ns)),
                 new FileEntry(
                     components.RuntimeTests,
