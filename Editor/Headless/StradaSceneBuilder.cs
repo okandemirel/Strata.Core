@@ -150,15 +150,20 @@ namespace Strada.Core.Editor.Headless
                     child.transform.SetParent(parent.transform);
             }
 
+            // Keyed by position, not by type name: an object can legitimately
+            // carry two components of the same type, and keying by type made the
+            // second overwrite the first — every field then landed on one
+            // instance while the other stayed at its defaults.
             var components = new Dictionary<string, Component>();
             foreach (var o in spec.objects)
             {
                 if (!objects.TryGetValue(o.id, out var go)) continue;
-                foreach (var c in o.components)
+                for (var ci = 0; ci < o.components.Count; ci++)
                 {
+                    var c = o.components[ci];
                     if (!types.TryGetValue(c.type, out var t)) continue;
                     var comp = go.AddComponent(t);
-                    components[$"{o.id}:{c.type}"] = comp;
+                    components[ComponentKey(o.id, ci)] = comp;
                 }
             }
 
@@ -173,9 +178,10 @@ namespace Strada.Core.Editor.Headless
 
             foreach (var o in spec.objects)
             {
-                foreach (var c in o.components)
+                for (var ci = 0; ci < o.components.Count; ci++)
                 {
-                    if (!components.TryGetValue($"{o.id}:{c.type}", out var comp)) continue;
+                    var c = o.components[ci];
+                    if (!components.TryGetValue(ComponentKey(o.id, ci), out var comp)) continue;
                     ApplyFields(comp, c.fields, assetPaths, objects, null, $"{o.id}.{c.type}", "reference");
                 }
             }
@@ -218,14 +224,32 @@ namespace Strada.Core.Editor.Headless
             }
             foreach (var o in spec.objects)
             {
-                foreach (var c in o.components)
+                for (var ci = 0; ci < o.components.Count; ci++)
                 {
+                    var c = o.components[ci];
                     if (!HasPrefabField(c.fields)) continue;
-                    if (!components.TryGetValue($"{o.id}:{c.type}", out var comp)) continue;
+                    if (!components.TryGetValue(ComponentKey(o.id, ci), out var comp)) continue;
                     if (comp == null) continue;
                     ApplyFields(comp, c.fields, assetPaths, objects, prefabPaths, $"{o.id}.{c.type}", "prefab");
                 }
             }
+
+            // 3) Re-save every prefab after the prefab pass. A prefab saved
+            // before it is idempotent; one whose component points at ANOTHER
+            // prefab is not — that field is assigned after the first save, so
+            // without this the reference exists only on the scene instance and
+            // the prefab on disk keeps {fileID: 0}.
+            foreach (var o in spec.objects)
+            {
+                if (string.IsNullOrEmpty(o.prefabPath)) continue;
+                if (!objects.TryGetValue(o.id, out var go) || go == null) continue;
+                if (!o.components.Exists(c => HasPrefabField(c.fields))) continue;
+
+                PrefabUtility.SaveAsPrefabAsset(go, o.prefabPath, out var resaved);
+                if (!resaved) Problems.Add($"prefab did not re-save after wiring: {o.prefabPath}");
+            }
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
 
             // A template the game spawns at runtime must not also be sitting in
             // the scene, or the first frame has two of it.
@@ -333,6 +357,14 @@ namespace Strada.Core.Editor.Headless
         }
 
         /// <summary>Does any field in this list want a prefab asset?</summary>
+        /// <summary>
+        /// Identifies one component slot on one object.
+        ///
+        /// The index, not the type name: an object may carry two components of
+        /// the same type, and a type-keyed map silently dropped the first.
+        /// </summary>
+        private static string ComponentKey(string objectId, int index) => $"{objectId}#{index}";
+
         private static bool HasPrefabField(List<SceneSpecField> fields)
         {
             if (fields == null) return false;
@@ -410,6 +442,7 @@ namespace Strada.Core.Editor.Headless
 
             // Every reference the spec asked for must be a real link, not a
             // null that looks like one.
+            var sceneDemands = new Dictionary<string, int>();
             foreach (var o in spec.objects)
             {
                 // An object saved as a prefab and removed from the scene has no
@@ -418,21 +451,17 @@ namespace Strada.Core.Editor.Headless
                 if (!string.IsNullOrEmpty(o.prefabPath) && !o.keepInScene) continue;
 
                 foreach (var c in o.components)
-                {
                     foreach (var f in c.fields)
                     {
                         // A prefab reference is a link like any other, and the
                         // one most likely to be silently null: it is assigned in
                         // a second pass, after an AssetDatabase refresh.
                         if (f.kind != "reference" && f.kind != "prefab") continue;
-                        var m = Regex.Match(sceneText, Regex.Escape(f.name) + @":\s*\{fileID:\s*(-?\d+)");
-                        if (!m.Success)
-                            Problems.Add($"{o.id}.{c.type}.{f.name}: not present in the saved scene");
-                        else if (m.Groups[1].Value == "0")
-                            Problems.Add($"{o.id}.{c.type}.{f.name}: serialized as fileID 0 (unassigned)");
+                        sceneDemands.TryGetValue(f.name, out var n);
+                        sceneDemands[f.name] = n + 1;
                     }
-                }
             }
+            VerifyLinks(sceneText, spec.scene.path, sceneDemands);
 
             // Prefabs get the same reading the scene does: the file has to exist,
             // its scripts have to have bound, and any reference it was asked to
@@ -450,18 +479,15 @@ namespace Strada.Core.Editor.Headless
                 if (Regex.IsMatch(prefabText, @"m_Script:\s*\{fileID:\s*0\b"))
                     Problems.Add($"{o.prefabPath}: a component's script did not bind (m_Script fileID 0)");
 
+                var prefabDemands = new Dictionary<string, int>();
                 foreach (var c in o.components)
-                {
                     foreach (var f in c.fields)
                     {
                         if (f.kind != "reference" && f.kind != "prefab") continue;
-                        var m = Regex.Match(prefabText, Regex.Escape(f.name) + @":\s*\{fileID:\s*(-?\d+)");
-                        if (!m.Success)
-                            Problems.Add($"{o.prefabPath}: {c.type}.{f.name} is not in the saved prefab");
-                        else if (m.Groups[1].Value == "0")
-                            Problems.Add($"{o.prefabPath}: {c.type}.{f.name} serialized as fileID 0 (unassigned)");
+                        prefabDemands.TryGetValue(f.name, out var n);
+                        prefabDemands[f.name] = n + 1;
                     }
-                }
+                VerifyLinks(prefabText, o.prefabPath, prefabDemands);
             }
 
             foreach (var a in spec.assets)
@@ -470,6 +496,53 @@ namespace Strada.Core.Editor.Headless
                 var text = File.ReadAllText(a.path);
                 if (Regex.IsMatch(text, @"m_Script:\s*\{fileID:\s*0\b"))
                     Problems.Add($"{a.path}: script did not bind (m_Script fileID 0)");
+
+                // An asset's own reference fields were never read back at all,
+                // so a config pointed at something unserialisable exited 0 with
+                // {fileID: 0} on disk — the exact failure this layer exists to
+                // catch, in the one file type it was not checking.
+                var assetDemands = new Dictionary<string, int>();
+                foreach (var f in a.fields)
+                {
+                    if (f.kind != "reference" && f.kind != "prefab") continue;
+                    assetDemands.TryGetValue(f.name, out var n);
+                    assetDemands[f.name] = n + 1;
+                }
+                VerifyLinks(text, a.path, assetDemands);
+            }
+        }
+
+        /// <summary>
+        /// Every reference the spec asked this file to carry must be a real link.
+        ///
+        /// Counted, not matched. The old check took the FIRST occurrence of a
+        /// field name anywhere in the file, so a scene where one object wired
+        /// `_target` correctly and three others left it null read as clean: the
+        /// first match was non-zero and the rest were never looked at.
+        /// </summary>
+        private static void VerifyLinks(string text, string label, Dictionary<string, int> demands)
+        {
+            foreach (var demand in demands)
+            {
+                var matches = Regex.Matches(text, Regex.Escape(demand.Key) + @":\s*\{fileID:\s*(-?\d+)");
+                var linked = 0;
+                var zeroed = 0;
+                foreach (Match m in matches)
+                {
+                    if (m.Groups[1].Value == "0") zeroed++;
+                    else linked++;
+                }
+
+                if (matches.Count == 0)
+                {
+                    Problems.Add($"{label}: {demand.Key} is not present in the saved file");
+                }
+                else if (linked < demand.Value)
+                {
+                    Problems.Add(
+                        $"{label}: {demand.Key} was asked for {demand.Value} time(s) but only " +
+                        $"{linked} is a real link ({zeroed} serialized as fileID 0)");
+                }
             }
         }
 
