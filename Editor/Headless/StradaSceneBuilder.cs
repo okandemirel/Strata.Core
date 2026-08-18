@@ -168,7 +168,7 @@ namespace Strada.Core.Editor.Headless
                 if (!assetPaths.TryGetValue(a.id, out var path)) continue;
                 var target = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
                 if (target == null) { Problems.Add($"asset did not import: {path}"); continue; }
-                ApplyFields(target, a.fields, assetPaths, objects, $"{a.type}");
+                ApplyFields(target, a.fields, assetPaths, objects, null, $"{a.type}", "reference");
             }
 
             foreach (var o in spec.objects)
@@ -176,8 +176,65 @@ namespace Strada.Core.Editor.Headless
                 foreach (var c in o.components)
                 {
                     if (!components.TryGetValue($"{o.id}:{c.type}", out var comp)) continue;
-                    ApplyFields(comp, c.fields, assetPaths, objects, $"{o.id}.{c.type}");
+                    ApplyFields(comp, c.fields, assetPaths, objects, null, $"{o.id}.{c.type}", "reference");
                 }
+            }
+
+            // ── Prefabs ──────────────────────────────────────────────────────
+            // After the component fields are applied, so the saved prefab
+            // carries its wiring instead of an empty shell; and before the
+            // second wiring pass, because a "prefab" reference cannot resolve
+            // to an asset that does not exist yet.
+            var prefabPaths = new Dictionary<string, string>();
+            foreach (var o in spec.objects)
+            {
+                if (string.IsNullOrEmpty(o.prefabPath)) continue;
+                if (!objects.TryGetValue(o.id, out var go)) continue;
+
+                EnsureDirectory(o.prefabPath);
+                var prefabAsset = PrefabUtility.SaveAsPrefabAsset(go, o.prefabPath, out var ok);
+                if (!ok || prefabAsset == null)
+                {
+                    Problems.Add($"prefab did not save: {o.prefabPath}");
+                    continue;
+                }
+                prefabPaths[o.id] = o.prefabPath;
+                Created.Add(o.prefabPath);
+            }
+            if (prefabPaths.Count > 0)
+            {
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+            }
+
+            // ── Wiring, pass two: references to the prefab assets ─────────────
+            foreach (var a in spec.assets)
+            {
+                if (!assetPaths.TryGetValue(a.id, out var path)) continue;
+                if (!HasPrefabField(a.fields)) continue;
+                var target = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
+                if (target == null) continue;
+                ApplyFields(target, a.fields, assetPaths, objects, prefabPaths, $"{a.type}", "prefab");
+            }
+            foreach (var o in spec.objects)
+            {
+                foreach (var c in o.components)
+                {
+                    if (!HasPrefabField(c.fields)) continue;
+                    if (!components.TryGetValue($"{o.id}:{c.type}", out var comp)) continue;
+                    if (comp == null) continue;
+                    ApplyFields(comp, c.fields, assetPaths, objects, prefabPaths, $"{o.id}.{c.type}", "prefab");
+                }
+            }
+
+            // A template the game spawns at runtime must not also be sitting in
+            // the scene, or the first frame has two of it.
+            foreach (var o in spec.objects)
+            {
+                if (string.IsNullOrEmpty(o.prefabPath) || o.keepInScene) continue;
+                if (!objects.TryGetValue(o.id, out var go) || go == null) continue;
+                UnityEngine.Object.DestroyImmediate(go);
+                Created.Add($"removed from scene (prefab only): {o.name ?? o.id}");
             }
 
             // ── Save ─────────────────────────────────────────────────────────
@@ -209,17 +266,31 @@ namespace Strada.Core.Editor.Headless
         /// Nothing is held across a scene or asset operation, because a handle
         /// that survives one becomes fake-null and assigns as {fileID: 0}.
         /// </summary>
+        /// <summary>
+        /// Assign the fields of one pass.
+        ///
+        /// <paramref name="pass"/> is "reference" on the first pass and "prefab"
+        /// on the second. A prefab reference cannot be resolved on the first,
+        /// because the asset it names is saved from an object that is still
+        /// being wired; splitting the passes is what keeps a prefab field from
+        /// silently assigning null.
+        /// </summary>
         private static void ApplyFields(
             UnityEngine.Object target,
             List<SceneSpecField> fields,
             IReadOnlyDictionary<string, string> assetPaths,
             IReadOnlyDictionary<string, GameObject> objects,
-            string label)
+            IReadOnlyDictionary<string, string> prefabPaths,
+            string label,
+            string pass)
         {
             if (fields == null || fields.Count == 0) return;
 
             foreach (var f in fields)
             {
+                var isPrefabField = f.kind == "prefab";
+                if (pass == "prefab" != isPrefabField) continue;
+
                 var field = FindSerializedField(target.GetType(), f.name);
                 if (field == null)
                 {
@@ -238,6 +309,16 @@ namespace Strada.Core.Editor.Headless
                             continue;
                         }
                         break;
+                    case "prefab":
+                        value = ResolvePrefab(f.reference, prefabPaths, field.FieldType);
+                        if (value == null)
+                        {
+                            Problems.Add(
+                                $"{label}.{f.name}: unresolved prefab '{f.reference}' — no object " +
+                                "in this spec declares a prefabPath under that id");
+                            continue;
+                        }
+                        break;
                     case "int": value = f.intValue; break;
                     case "bool": value = f.boolValue; break;
                     case "float": value = f.floatValue; break;
@@ -249,6 +330,34 @@ namespace Strada.Core.Editor.Headless
             }
 
             EditorUtility.SetDirty(target);
+        }
+
+        /// <summary>Does any field in this list want a prefab asset?</summary>
+        private static bool HasPrefabField(List<SceneSpecField> fields)
+        {
+            if (fields == null) return false;
+            foreach (var f in fields) if (f.kind == "prefab") return true;
+            return false;
+        }
+
+        /// <summary>
+        /// The saved prefab asset for an id, loaded fresh from its path.
+        ///
+        /// Never the handle SaveAsPrefabAsset returned: that is held across an
+        /// AssetDatabase refresh, and a handle held across one assigns as
+        /// {fileID: 0} while looking perfectly valid in the debugger.
+        /// </summary>
+        private static object ResolvePrefab(
+            string id,
+            IReadOnlyDictionary<string, string> prefabPaths,
+            Type wanted)
+        {
+            if (string.IsNullOrEmpty(id) || prefabPaths == null) return null;
+            if (!prefabPaths.TryGetValue(id, out var path)) return null;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (go == null) return null;
+            return wanted == typeof(GameObject) ? (object)go : go.GetComponent(wanted);
         }
 
         private static object ResolveReference(
@@ -303,16 +412,54 @@ namespace Strada.Core.Editor.Headless
             // null that looks like one.
             foreach (var o in spec.objects)
             {
+                // An object saved as a prefab and removed from the scene has no
+                // fields in the scene file to check; its wiring lives in the
+                // .prefab, which is verified below.
+                if (!string.IsNullOrEmpty(o.prefabPath) && !o.keepInScene) continue;
+
                 foreach (var c in o.components)
                 {
                     foreach (var f in c.fields)
                     {
-                        if (f.kind != "reference") continue;
+                        // A prefab reference is a link like any other, and the
+                        // one most likely to be silently null: it is assigned in
+                        // a second pass, after an AssetDatabase refresh.
+                        if (f.kind != "reference" && f.kind != "prefab") continue;
                         var m = Regex.Match(sceneText, Regex.Escape(f.name) + @":\s*\{fileID:\s*(-?\d+)");
                         if (!m.Success)
                             Problems.Add($"{o.id}.{c.type}.{f.name}: not present in the saved scene");
                         else if (m.Groups[1].Value == "0")
                             Problems.Add($"{o.id}.{c.type}.{f.name}: serialized as fileID 0 (unassigned)");
+                    }
+                }
+            }
+
+            // Prefabs get the same reading the scene does: the file has to exist,
+            // its scripts have to have bound, and any reference it was asked to
+            // carry has to be a real link.
+            foreach (var o in spec.objects)
+            {
+                if (string.IsNullOrEmpty(o.prefabPath)) continue;
+                if (!File.Exists(o.prefabPath))
+                {
+                    Problems.Add($"prefab missing after save: {o.prefabPath}");
+                    continue;
+                }
+
+                var prefabText = File.ReadAllText(o.prefabPath);
+                if (Regex.IsMatch(prefabText, @"m_Script:\s*\{fileID:\s*0\b"))
+                    Problems.Add($"{o.prefabPath}: a component's script did not bind (m_Script fileID 0)");
+
+                foreach (var c in o.components)
+                {
+                    foreach (var f in c.fields)
+                    {
+                        if (f.kind != "reference" && f.kind != "prefab") continue;
+                        var m = Regex.Match(prefabText, Regex.Escape(f.name) + @":\s*\{fileID:\s*(-?\d+)");
+                        if (!m.Success)
+                            Problems.Add($"{o.prefabPath}: {c.type}.{f.name} is not in the saved prefab");
+                        else if (m.Groups[1].Value == "0")
+                            Problems.Add($"{o.prefabPath}: {c.type}.{f.name} serialized as fileID 0 (unassigned)");
                     }
                 }
             }

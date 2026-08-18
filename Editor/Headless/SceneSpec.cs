@@ -55,6 +55,20 @@ namespace Strada.Core.Editor.Headless
         public string name;
         /// <summary>id of the parent object, or null for a root object.</summary>
         public string parent;
+        /// <summary>
+        /// Where to save this object as a prefab asset, e.g.
+        /// "Assets/Prefabs/Enemy.prefab". Empty means it is a scene object only.
+        ///
+        /// Saved after its fields are applied, so the prefab captures the wiring
+        /// rather than an empty shell.
+        /// </summary>
+        public string prefabPath;
+        /// <summary>
+        /// Whether the instance stays in the scene once it has been saved as a
+        /// prefab. A spawner's template usually should not: the game creates
+        /// those at runtime, and one left behind is a duplicate on frame zero.
+        /// </summary>
+        public bool keepInScene = true;
         public List<SceneSpecComponent> components = new List<SceneSpecComponent>();
     }
 
@@ -84,6 +98,16 @@ namespace Strada.Core.Editor.Headless
         public bool boolValue;
         public float floatValue;
         /// <summary>"reference" | "string" | "int" | "bool" | "float".</summary>
+        /// <summary>
+        /// "reference" | "prefab" | "string" | "int" | "bool" | "float".
+        ///
+        /// "reference" and "prefab" can name the same object and mean different
+        /// things: a reference to the instance living in the scene, or to the
+        /// prefab asset saved from it. A field holding a template to spawn wants
+        /// the asset; a field holding the thing already on screen wants the
+        /// instance. Nothing in the object itself distinguishes them, so the
+        /// spec says which rather than letting the executor guess.
+        /// </summary>
         public string kind = "string";
     }
 }
