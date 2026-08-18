@@ -253,12 +253,36 @@ namespace Strada.Core.Editor.Headless
 
             // A template the game spawns at runtime must not also be sitting in
             // the scene, or the first frame has two of it.
+            var removedAny = false;
             foreach (var o in spec.objects)
             {
                 if (string.IsNullOrEmpty(o.prefabPath) || o.keepInScene) continue;
                 if (!objects.TryGetValue(o.id, out var go) || go == null) continue;
                 UnityEngine.Object.DestroyImmediate(go);
+                removedAny = true;
                 Created.Add($"removed from scene (prefab only): {o.name ?? o.id}");
+            }
+
+            // A parent prefab was serialized while its children were all still
+            // in the scene, so a child marked keepInScene: false was written
+            // into the parent's .prefab and only removed from the scene. The
+            // invariant it exists to keep — "a template the game spawns must not
+            // also be sitting there, or the first frame has two of it" — was
+            // then broken the moment the parent was instantiated. Re-save the
+            // survivors so every prefab matches the final hierarchy.
+            if (removedAny)
+            {
+                foreach (var o in spec.objects)
+                {
+                    if (string.IsNullOrEmpty(o.prefabPath)) continue;
+                    if (!objects.TryGetValue(o.id, out var go) || go == null) continue;
+
+                    PrefabUtility.SaveAsPrefabAsset(go, o.prefabPath, out var resaved);
+                    if (!resaved)
+                        Problems.Add($"prefab did not re-save after removing a template: {o.prefabPath}");
+                }
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
             }
 
             // ── Save ─────────────────────────────────────────────────────────
