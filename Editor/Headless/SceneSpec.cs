@@ -93,13 +93,30 @@ namespace Strada.Core.Editor.Headless
         public string name;
         /// <summary>id of an asset or object declared elsewhere in this spec.</summary>
         public string reference;
+        /// <summary>
+        /// Ids for a list-valued field, in order.
+        ///
+        /// A serialized List<T> cannot be expressed by a single reference,
+        /// and the most important field in the framework is one:
+        /// GameBootstrapperConfig._modules. Without this the tool could assemble
+        /// a bootstrapper wired to a config that starts no modules — measured, a
+        /// run hand-wrote the asset's YAML rather than use the tool, because the
+        /// tool could not say what it needed to say.
+        /// </summary>
+        public List<string> references = new List<string>();
+        /// <summary>
+        /// For a list of wrapper structs, the field inside each element that
+        /// holds the reference — e.g. "_config" for ModuleEntry, whose other
+        /// field (_enabled) takes its C# default.
+        /// </summary>
+        public string elementField;
         public string stringValue;
         public int intValue;
         public bool boolValue;
         public float floatValue;
         /// <summary>"reference" | "string" | "int" | "bool" | "float".</summary>
         /// <summary>
-        /// "reference" | "prefab" | "string" | "int" | "bool" | "float".
+        /// "reference" | "referenceList" | "prefab" | "string" | "int" | "bool" | "float".
         ///
         /// "reference" and "prefab" can name the same object and mean different
         /// things: a reference to the instance living in the scene, or to the

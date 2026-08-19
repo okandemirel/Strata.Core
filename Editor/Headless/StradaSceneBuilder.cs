@@ -336,7 +336,10 @@ namespace Strada.Core.Editor.Headless
 
             foreach (var f in fields)
             {
-                var isPrefabField = f.kind == "prefab";
+                // A list runs in the second pass like a prefab does: by then
+                // both the assets and the prefabs exist, and a list may name
+                // either.
+                var isPrefabField = f.kind == "prefab" || f.kind == "referenceList";
                 if (pass == "prefab" != isPrefabField) continue;
 
                 var field = FindSerializedField(target.GetType(), f.name);
@@ -354,6 +357,16 @@ namespace Strada.Core.Editor.Headless
                         if (value == null)
                         {
                             Problems.Add($"{label}.{f.name}: unresolved reference '{f.reference}'");
+                            continue;
+                        }
+                        break;
+                    case "referenceList":
+                        value = BuildReferenceList(f, field.FieldType, assetPaths, objects, prefabPaths);
+                        if (value == null)
+                        {
+                            Problems.Add(
+                                $"{label}.{f.name}: could not build the list — check that every id in " +
+                                "'references' names an asset or object in this spec");
                             continue;
                         }
                         break;
@@ -389,10 +402,70 @@ namespace Strada.Core.Editor.Headless
         /// </summary>
         private static string ComponentKey(string objectId, int index) => $"{objectId}#{index}";
 
+
+        /// <summary>
+        /// A serialized List<T>, built from the ids the spec listed.
+        ///
+        /// Two shapes occur. A plain List<SomeAsset> takes the references
+        /// directly. A list of wrapper structs — GameBootstrapperConfig._modules
+        /// is List<ModuleEntry>, and ModuleEntry holds _config plus _enabled
+        /// — needs one element constructed per id, with the reference dropped
+        /// into the field the spec names and everything else left at its C#
+        /// default. That second shape is the one the framework actually depends
+        /// on: without it a bootstrapper can be perfectly wired to a config that
+        /// starts nothing.
+        /// </summary>
+        private static object BuildReferenceList(
+            SceneSpecField f,
+            Type fieldType,
+            IReadOnlyDictionary<string, string> assetPaths,
+            IReadOnlyDictionary<string, GameObject> objects,
+            IReadOnlyDictionary<string, string> prefabPaths)
+        {
+            if (f.references == null || f.references.Count == 0) return null;
+            if (!fieldType.IsGenericType) return null;
+
+            var elementType = fieldType.GetGenericArguments()[0];
+            var list = (System.Collections.IList)Activator.CreateInstance(fieldType);
+
+            foreach (var id in f.references)
+            {
+                object element;
+
+                if (string.IsNullOrEmpty(f.elementField))
+                {
+                    element = ResolveReference(id, assetPaths, objects, elementType)
+                        ?? ResolvePrefab(id, prefabPaths, elementType);
+                }
+                else
+                {
+                    var wrapper = Activator.CreateInstance(elementType);
+                    var inner = FindSerializedField(elementType, f.elementField);
+                    if (inner == null)
+                    {
+                        Problems.Add($"{elementType.Name} has no serialized field '{f.elementField}'");
+                        return null;
+                    }
+
+                    var target = ResolveReference(id, assetPaths, objects, inner.FieldType)
+                        ?? ResolvePrefab(id, prefabPaths, inner.FieldType);
+                    if (target == null) return null;
+
+                    inner.SetValue(wrapper, target);
+                    element = wrapper;
+                }
+
+                if (element == null) return null;
+                list.Add(element);
+            }
+
+            return list;
+        }
+
         private static bool HasPrefabField(List<SceneSpecField> fields)
         {
             if (fields == null) return false;
-            foreach (var f in fields) if (f.kind == "prefab") return true;
+            foreach (var f in fields) if (f.kind == "prefab" || f.kind == "referenceList") return true;
             return false;
         }
 
@@ -480,6 +553,18 @@ namespace Strada.Core.Editor.Headless
                         // A prefab reference is a link like any other, and the
                         // one most likely to be silently null: it is assigned in
                         // a second pass, after an AssetDatabase refresh.
+                        if (f.kind == "referenceList")
+                        {
+                            // A list of wrapper structs serialises its links
+                            // under the inner field, not the list's own name:
+                            // "_modules:" is followed by "- _config: {fileID..."
+                            // so looking for _modules beside a fileID finds
+                            // nothing and reports a failure that did not happen.
+                            var key = string.IsNullOrEmpty(f.elementField) ? f.name : f.elementField;
+                            sceneDemands.TryGetValue(key, out var listCount);
+                            sceneDemands[key] = listCount + (f.references?.Count ?? 0);
+                            continue;
+                        }
                         if (f.kind != "reference" && f.kind != "prefab") continue;
                         sceneDemands.TryGetValue(f.name, out var n);
                         sceneDemands[f.name] = n + 1;
@@ -528,6 +613,16 @@ namespace Strada.Core.Editor.Headless
                 var assetDemands = new Dictionary<string, int>();
                 foreach (var f in a.fields)
                 {
+                    if (f.kind == "referenceList")
+                    {
+                        // Every entry is a link that has to be real: a config
+                        // listing ten modules with one of them null starts nine.
+                        // Wrapper lists serialise under the inner field name.
+                        var key = string.IsNullOrEmpty(f.elementField) ? f.name : f.elementField;
+                        assetDemands.TryGetValue(key, out var listCount);
+                        assetDemands[key] = listCount + (f.references?.Count ?? 0);
+                        continue;
+                    }
                     if (f.kind != "reference" && f.kind != "prefab") continue;
                     assetDemands.TryGetValue(f.name, out var n);
                     assetDemands[f.name] = n + 1;
